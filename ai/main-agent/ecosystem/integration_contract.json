@@ -1,0 +1,45 @@
+{
+  "contract_version": "1.0",
+  "purpose": "Standard exchange envelope for all applications connected to the Main Agent",
+  "required_envelope_fields": [
+    "source_system",
+    "source_record_id",
+    "record_type",
+    "occurred_at",
+    "updated_at",
+    "payload"
+  ],
+  "optional_cross_ids": [
+    "business_case_id",
+    "customer_id",
+    "lead_id",
+    "deal_id",
+    "order_id",
+    "execution_id",
+    "vehicle_id",
+    "counterparty_id",
+    "invoice_id",
+    "transaction_id",
+    "purchase_id",
+    "task_id",
+    "incident_id",
+    "plan_item_id"
+  ],
+  "link_status": ["confirmed", "suggested", "needs_review", "rejected"],
+  "data_ownership": "source_application",
+  "main_agent_direct_database_access": false,
+  "audit_required": true,
+  "security_control_external": true,
+  "example": {
+    "source_system": "fleet_management",
+    "source_record_id": "repair-123",
+    "record_type": "repair",
+    "occurred_at": "2026-08-18T12:00:00+03:00",
+    "updated_at": "2026-08-18T12:30:00+03:00",
+    "business_case_id": "case-001",
+    "order_id": "order-521",
+    "vehicle_id": "kamaz-e238",
+    "link_status": "confirmed",
+    "payload": {}
+  }
+}
