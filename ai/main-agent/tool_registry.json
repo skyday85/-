@@ -1,0 +1,79 @@
+{
+  "version": "1.0",
+  "agent": "Главный агент",
+  "principles": {
+    "read_before_write": true,
+    "no_direct_database_access": true,
+    "financial_separation": ["money_movement", "settlements", "business_operations", "actual_costs"],
+    "security_control_external": true
+  },
+  "domains": {
+    "fleet": [
+      {"name": "get_fleet", "mode": "read", "purpose": "Получить весь автопарк"},
+      {"name": "get_vehicle", "mode": "read", "purpose": "Получить карточку техники"},
+      {"name": "get_vehicle_history", "mode": "read", "purpose": "Получить историю техники"},
+      {"name": "get_repairs", "mode": "read", "purpose": "Получить ремонты"},
+      {"name": "create_repair", "mode": "write", "approval": "context_check", "purpose": "Создать ремонт"},
+      {"name": "get_attention_items", "mode": "read", "purpose": "Получить события, требующие внимания"}
+    ],
+    "banking": [
+      {"name": "get_bank_transactions", "mode": "read", "purpose": "Получить банковские операции"},
+      {"name": "classify_bank_transaction", "mode": "write", "approval": "reviewable", "purpose": "Предложить/записать классификацию платежа"},
+      {"name": "allocate_transaction", "mode": "write", "approval": "reviewable", "purpose": "Распределить банковскую операцию по статьям и объектам"},
+      {"name": "match_payment_to_invoice", "mode": "write", "approval": "reviewable", "purpose": "Связать банковский платёж со счётом"}
+    ],
+    "finance": [
+      {"name": "get_financial_categories", "mode": "read", "purpose": "Получить статьи учёта"},
+      {"name": "get_cash_position", "mode": "read", "purpose": "Получить остатки денежных средств"},
+      {"name": "get_cashflow", "mode": "read", "purpose": "Получить движение денежных средств"},
+      {"name": "get_actual_costs", "mode": "read", "purpose": "Получить фактические расходы"},
+      {"name": "get_supplier_advances", "mode": "read", "purpose": "Получить авансы поставщикам"},
+      {"name": "get_receivables", "mode": "read", "purpose": "Получить дебиторскую задолженность"},
+      {"name": "get_payables", "mode": "read", "purpose": "Получить кредиторскую задолженность"},
+      {"name": "build_cashflow_forecast", "mode": "read", "purpose": "Построить прогноз движения денег"},
+      {"name": "run_scenario", "mode": "read", "purpose": "Посчитать сценарий без изменения утверждённого плана"}
+    ],
+    "invoices_and_purchases": [
+      {"name": "get_invoices", "mode": "read", "purpose": "Получить счета"},
+      {"name": "get_purchases", "mode": "read", "purpose": "Получить закупки"},
+      {"name": "get_purchase_status", "mode": "read", "purpose": "Получить состояние закупки"},
+      {"name": "delegate_to_buyer", "mode": "delegate", "approval": "policy_based", "purpose": "Передать задачу агенту Закупщик"}
+    ],
+    "fuel": [
+      {"name": "get_fuel_transactions", "mode": "read", "purpose": "Получить фактические заправки"},
+      {"name": "reconcile_fuel_advance", "mode": "read", "purpose": "Сверить аванс поставщику топлива с фактическими заправками"}
+    ],
+    "control": [
+      {"name": "get_discrepancies", "mode": "read", "purpose": "Получить найденные расхождения"},
+      {"name": "run_reconciliation", "mode": "read", "purpose": "Запустить сверку источников"},
+      {"name": "resolve_discrepancy", "mode": "write", "approval": "reviewable", "purpose": "Зафиксировать результат разбора расхождения"},
+      {"name": "get_risks", "mode": "read", "purpose": "Получить текущие риски"}
+    ],
+    "calendar_and_tasks": [
+      {"name": "get_calendar", "mode": "read", "purpose": "Получить единый календарь"},
+      {"name": "get_tasks", "mode": "read", "purpose": "Получить задачи и поручения"},
+      {"name": "create_task", "mode": "write", "approval": "reviewable", "purpose": "Создать поручение"},
+      {"name": "update_task_status", "mode": "write", "approval": "reviewable", "purpose": "Обновить статус поручения"}
+    ],
+    "planning": [
+      {"name": "get_plan", "mode": "read", "purpose": "Получить утверждённый план"},
+      {"name": "create_plan_draft", "mode": "write", "approval": "reviewable", "purpose": "Создать проект годового/месячного плана"},
+      {"name": "get_plan_status", "mode": "read", "purpose": "Получить план/факт и отклонения"},
+      {"name": "suggest_plan_adjustment", "mode": "read", "purpose": "Предложить корректировку плана"},
+      {"name": "apply_plan_adjustment", "mode": "write", "approval": "explicit_user_approval", "purpose": "Применить существенную корректировку утверждённого пллана"}
+    ],
+    "analytics": [
+      {"name": "get_vehicle_economics", "mode": "read", "purpose": "Получить экономику единицы техники"},
+      {"name": "get_business_economics", "mode": "read", "purpose": "Получить экономику организации"},
+      {"name": "get_kpis", "mode": "read", "purpose": "Получить ключевые показатели"},
+      {"name": "build_management_report", "mode": "read", "purpose": "Сформировать управленческий отчёт"}
+    ]
+  },
+  "forbidden_for_main_agent": [
+    "disable_ai_globally",
+    "lock_system",
+    "backup_and_purge",
+    "destroy_all_data",
+    "restore_security_backup"
+  ]
+}
