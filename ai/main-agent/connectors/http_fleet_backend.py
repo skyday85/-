@@ -16,19 +16,24 @@ class HttpFleetBackend:
         if not self.api_key:
             raise RuntimeError("FLEET_MAIN_AGENT_API_KEY is required")
 
-    def _get(self, vehicle_id: Optional[str] = None, view: Optional[str] = None) -> Dict[str, Any]:
+    def _request(self, method: str, *, vehicle_id: Optional[str] = None,
+                 view: Optional[str] = None, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         params: Dict[str, str] = {}
         if vehicle_id:
             params["vehicleId"] = vehicle_id
         if view:
             params["view"] = view
         query = f"?{urlencode(params)}" if params else ""
-        request = Request(
-            f"{self.base_url}/api/agent/fleet{query}",
-            headers={"x-main-agent-key": self.api_key, "accept": "application/json"},
-        )
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {"x-main-agent-key": self.api_key, "accept": "application/json"}
+        if payload is not None:
+            headers["content-type"] = "application/json"
+        request = Request(f"{self.base_url}/api/agent/fleet{query}", data=data, headers=headers, method=method)
         with urlopen(request, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def _get(self, vehicle_id: Optional[str] = None, view: Optional[str] = None) -> Dict[str, Any]:
+        return self._request("GET", vehicle_id=vehicle_id, view=view)
 
     def list_vehicles(self) -> List[Dict[str, Any]]:
         return [self._vehicle_shape(row) for row in self._get().get("vehicles", [])]
@@ -53,7 +58,15 @@ class HttpFleetBackend:
 
     def create_repair(self, vehicle_id: str, problem: str, mileage: Optional[int] = None,
                       notes: Optional[str] = None) -> Dict[str, Any]:
-        raise NotImplementedError("Repair writes are not enabled for the Main Agent service API yet")
+        result = self._request("POST", payload={
+            "action": "create_repair",
+            "vehicleId": vehicle_id,
+            "problem": problem,
+            "mileage": mileage,
+            "notes": notes,
+        })
+        repair = result["repair"]
+        return {**repair, "repair_id": repair.get("id"), "audit_recorded": bool(result.get("audit", {}).get("recorded"))}
 
     def get_maintenance_status(self, vehicle_id: str) -> Dict[str, Any]:
         vehicle = self._get(vehicle_id).get("vehicle", {})
