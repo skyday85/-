@@ -6,11 +6,7 @@ from urllib.request import Request, urlopen
 
 
 class HttpFleetBackend:
-    """Service-to-service backend for the real fleet-management application.
-
-    Requires FLEET_API_BASE_URL and FLEET_MAIN_AGENT_API_KEY. The Main Agent
-    never connects to the fleet database directly.
-    """
+    """Service-to-service backend for the real fleet-management application."""
 
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
         self.base_url = (base_url or os.getenv("FLEET_API_BASE_URL", "")).rstrip("/")
@@ -20,8 +16,13 @@ class HttpFleetBackend:
         if not self.api_key:
             raise RuntimeError("FLEET_MAIN_AGENT_API_KEY is required")
 
-    def _get(self, vehicle_id: Optional[str] = None) -> Dict[str, Any]:
-        query = f"?{urlencode({'vehicleId': vehicle_id})}" if vehicle_id else ""
+    def _get(self, vehicle_id: Optional[str] = None, view: Optional[str] = None) -> Dict[str, Any]:
+        params: Dict[str, str] = {}
+        if vehicle_id:
+            params["vehicleId"] = vehicle_id
+        if view:
+            params["view"] = view
+        query = f"?{urlencode(params)}" if params else ""
         request = Request(
             f"{self.base_url}/api/agent/fleet{query}",
             headers={"x-main-agent-key": self.api_key, "accept": "application/json"},
@@ -30,8 +31,7 @@ class HttpFleetBackend:
             return json.loads(response.read().decode("utf-8"))
 
     def list_vehicles(self) -> List[Dict[str, Any]]:
-        rows = self._get().get("vehicles", [])
-        return [self._vehicle_shape(row) for row in rows]
+        return [self._vehicle_shape(row) for row in self._get().get("vehicles", [])]
 
     def get_vehicle(self, vehicle_id: str) -> Optional[Dict[str, Any]]:
         row = self._get(vehicle_id).get("vehicle")
@@ -69,10 +69,8 @@ class HttpFleetBackend:
     def get_vehicle_documents(self, vehicle_id: str) -> List[Dict[str, Any]]:
         vehicle = self._get(vehicle_id).get("vehicle", {})
         documents: List[Dict[str, Any]] = [{
-            "document_id": f"diagnostic-card:{vehicle_id}",
-            "vehicle_id": vehicle_id,
-            "document_type": "diagnostic_card",
-            "number": vehicle.get("diagnosticCardNumber"),
+            "document_id": f"diagnostic-card:{vehicle_id}", "vehicle_id": vehicle_id,
+            "document_type": "diagnostic_card", "number": vehicle.get("diagnosticCardNumber"),
             "valid_until": vehicle.get("diagnosticCardUntil"),
         }]
         for policy in vehicle.get("insurancePolicies", []):
@@ -91,30 +89,19 @@ class HttpFleetBackend:
         return [self._id_shape(x, "purchase_id") for x in self._get(vehicle_id).get("vehicle", {}).get("purchaseRequests", [])]
 
     def get_attention_items(self) -> List[Dict[str, Any]]:
-        # Dedicated alert endpoint will replace this derived MVP implementation.
-        items: List[Dict[str, Any]] = []
-        for vehicle in self._get().get("vehicles", []):
-            current = vehicle.get("currentMileage")
-            next_service = vehicle.get("nextMaintenanceMileage")
-            if current is not None and next_service is not None and next_service - current <= 2000:
-                items.append({
-                    "attention_id": f"maintenance:{vehicle['id']}",
-                    "vehicle_id": vehicle["id"],
-                    "type": "maintenance_due",
-                    "current_mileage": current,
-                    "next_maintenance_mileage": next_service,
-                })
-        return items
+        rows = self._get(view="attention").get("items", [])
+        result = []
+        for row in rows:
+            normalized = dict(row)
+            normalized["attention_id"] = row.get("attentionId")
+            normalized["vehicle_id"] = row.get("vehicleId")
+            result.append(normalized)
+        return result
 
     @staticmethod
     def _vehicle_shape(row: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            **row,
-            "vehicle_id": row.get("id"),
-            "type": row.get("vehicleType"),
-            "plate_number": row.get("stateNumber"),
-            "current_mileage": row.get("currentMileage"),
-        }
+        return {**row, "vehicle_id": row.get("id"), "type": row.get("vehicleType"),
+                "plate_number": row.get("stateNumber"), "current_mileage": row.get("currentMileage")}
 
     @staticmethod
     def _id_shape(row: Dict[str, Any], target: str) -> Dict[str, Any]:
