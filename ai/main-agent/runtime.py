@@ -2,6 +2,7 @@ from agents.delegation import DelegationEngine
 from agents.registry import AgentRegistry
 from connectors.http_fleet_backend import HttpFleetBackend
 from ecosystem.expense_bridge import ExpenseBridge
+from email.mail_collector_agent import MailCollectorAgent
 from finance.invoices import InvoiceWorkflow
 from main_agent import build_main_agent
 from parts.catalogs import PartsCatalogRegistry
@@ -10,9 +11,9 @@ from parts.catalogs import PartsCatalogRegistry
 class MainAgentRuntime:
     """Production assembly for the organization-level Main Agent.
 
-    The Main Agent coordinates fleet, finance, parts and specialized agents.
-    Source applications retain ownership of their data; no direct database
-    access is granted to the Main Agent or its child agents.
+    The Main Agent coordinates fleet, finance, parts, unified mail and specialized
+    agents. Source applications retain ownership of their data; no direct
+    database access is granted to the Main Agent or its child agents.
     """
 
     def __init__(self):
@@ -22,6 +23,7 @@ class MainAgentRuntime:
         self.expense_bridge = ExpenseBridge()
         self.agent_registry = AgentRegistry()
         self.delegation = DelegationEngine(self.agent_registry)
+        self.mail_collector = MailCollectorAgent()
 
     def build_parts_search_plan(self, *, brand: str, query: str,
                                 model: str | None = None,
@@ -54,6 +56,24 @@ class MainAgentRuntime:
 
     def complete_delegated_task(self, delegation_id: str, result):
         return self.delegation.complete(delegation_id, result)
+
+    def add_mail_account(self, *, account_id: str, address: str, provider: str,
+                         display_name: str | None = None):
+        return self.mail_collector.add_account(
+            account_id=account_id,
+            address=address,
+            provider=provider,
+            display_name=display_name,
+        )
+
+    def ingest_mail(self, messages):
+        return self.mail_collector.ingest_messages(messages)
+
+    def unified_inbox(self, *, unread_only: bool = False):
+        return self.mail_collector.inbox(unread_only=unread_only)
+
+    def process_mail(self, email_id: str):
+        return self.mail_collector.process_message(email_id)
 
 
 def build_runtime():
