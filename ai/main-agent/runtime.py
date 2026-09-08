@@ -1,10 +1,12 @@
 from agents.delegation import DelegationEngine
 from agents.registry import AgentRegistry
 from app_shell.client_api import UnifiedClientApi
+from app_shell.mail_accounts import MailAccountsViewModel
 from app_shell.navigation import AppShellRegistry
 from connectors.http_fleet_backend import HttpFleetBackend
 from ecosystem.expense_bridge import ExpenseBridge
 from mail_contour.mail_collector_agent import MailCollectorAgent
+from mail_contour.provider_adapters import GmailProviderAdapter, OutlookProviderAdapter
 from mail_contour.providers import MailProviderRegistry
 from mail_contour.sync_service import UnifiedMailSyncService
 from finance.invoices import InvoiceWorkflow
@@ -36,6 +38,7 @@ class MainAgentRuntime:
         )
         self.app_shell = AppShellRegistry()
         self.client_api = UnifiedClientApi(self)
+        self.mail_accounts_view = MailAccountsViewModel(self)
 
     def build_parts_search_plan(self, *, brand: str, query: str,
                                 model: str | None = None,
@@ -91,6 +94,12 @@ class MainAgentRuntime:
         self.mail_providers.register(backend)
         return self.mail_sync.refresh_accounts()
 
+    def register_standard_mail_providers(self, gateway):
+        """Register Gmail and Outlook over one secure OAuth gateway."""
+        self.mail_providers.register(GmailProviderAdapter(gateway))
+        self.mail_providers.register(OutlookProviderAdapter(gateway))
+        return self.mail_sync.refresh_accounts()
+
     def begin_mail_authorization(self, *, provider: str, redirect_uri: str, state: str):
         backend = self.mail_providers.get(provider)
         return backend.build_authorization_url(redirect_uri=redirect_uri, state=state)
@@ -108,6 +117,9 @@ class MainAgentRuntime:
 
     def mail_connection_state(self):
         return self.mail_sync.state()
+
+    def mail_accounts_overview(self):
+        return self.mail_accounts_view.overview()
 
     def sync_mail(self):
         return self.mail_sync.sync_all()
