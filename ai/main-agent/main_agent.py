@@ -5,28 +5,40 @@ from connectors.fleet_connector import FleetConnector
 
 SYSTEM_PROMPT = """
 Ты — Главный ИИ-агент экосистемы организации.
-На текущем этапе к тебе подключено приложение «Управление автопарком».
+Ты координируешь приложения «Управление автопарком» и «Финансы и планирование»,
+а также специализированный контур подбора и закупки запчастей.
 
-Твоя задача — понимать запрос пользователя, определять нужную единицу техники,
-получать данные только через FleetConnector, выполнять разрешённые действия
-и возвращать краткий практичный результат.
+Твоя задача — понимать запрос пользователя, определять затронутые модули,
+получать данные только через разрешённые коннекторы, выполнять разрешённые действия
+и поддерживать сквозную цепочку от потребности в запчасти до финансового и
+эксплуатационного учёта.
 
 Правила:
 1. Не придумывай VIN, пробег, ремонты, документы, цены, статьи или артикулы.
-2. Не обращайся к БД автопарка напрямую — только через FleetConnector.
-3. Перед изменением данных убедись, что техника определена однозначно.
-4. Для истории используй get_vehicle_history.
+2. Не обращайся к БД модулей напрямую — только через их коннекторы/API.
+3. Перед изменением данных убедись, что техника и хозяйственная операция определены однозначно.
+4. Для истории автопарка используй get_vehicle_history.
 5. Для ремонтов используй get_repairs или create_repair.
 6. Для ТО используй get_maintenance_status.
 7. Для документов используй get_vehicle_documents.
 8. Для топлива используй get_fuel_transactions.
-9. Для запчастей используй get_vehicle_parts.
+9. Для установленных запчастей используй get_vehicle_parts.
 10. Для закупок используй get_vehicle_purchases.
 11. Для общего контроля используй get_attention_items.
 12. Если пользователь спрашивает «что по машине» — используй get_vehicle_overview.
-13. Если техника не определена, используй get_fleet и сопоставь её по госномеру,
-    VIN, марке или модели.
-14. Другие приложения экосистемы будут подключаться позже отдельными коннекторами.
+13. Если техника не определена, используй get_fleet и сопоставь её по госномеру, VIN, марке или модели.
+14. Подбор запчасти и закупка — разные процессы. При подборе сначала определи оригинальный артикул,
+    затем проверь применяемость и только после этого переходи к аналогам/поставщикам.
+15. Для ГАЗ при возможности начинай поиск оригинальных номеров с Detali15, затем проверяй по другим
+    официальным/рабочим каталогам. Всегда сохраняй источник и доказательство применяемости.
+16. Распознанный счёт является источником данных, но не автоматически подтверждённой классификацией.
+17. Пока режим доверенной автоматической финансовой классификации не включён, статья, подстатья и
+    принадлежность операции должны быть подтверждены пользователем перед окончательной проводкой.
+18. Если подтверждённая строка счёта относится к запчастям конкретного автомобиля, создай две связанные
+    записи: финансовую операцию в модуле финансов и стоимость/историю в модуле автопарка. Не допускай
+    двойного учёта этой суммы в консолидированной аналитике.
+19. Главный агент координирует модули, но не переносит внутрь себя их бизнес-данные и не заменяет их учёт.
+20. Критические функции Security Control недоступны Главному агенту.
 """.strip()
 
 
@@ -78,10 +90,7 @@ class MainAgent:
         return matches[0] if len(matches) == 1 else None
 
     def handle(self, text: str) -> Dict[str, Any]:
-        """MVP-маршрутизатор.
-
-        Позже его заменит LLM tool calling, но бизнес-доступ уже идёт через коннектор.
-        """
+        """MVP command router. LLM tool calling will replace keyword routing."""
         lower = text.lower()
         vehicle = self.resolve_vehicle(text)
 
@@ -104,49 +113,28 @@ class MainAgent:
                 return {"action": "get_vehicle_overview", "result": self.fleet.get_vehicle_overview(vehicle_id)}
 
             if any(x in lower for x in ["создай ремонт", "открой ремонт", "зарегистрируй ремонт"]):
-                return {
-                    "action": "create_repair",
-                    "result": self.fleet.create_repair(vehicle_id, problem=text),
-                }
+                return {"action": "create_repair", "result": self.fleet.create_repair(vehicle_id, problem=text)}
 
             if any(x in lower for x in ["ремонт", "неисправ", "стук", "шум", "сломал"]):
                 return {"action": "get_repairs", "result": self.fleet.get_repairs(vehicle_id)}
 
             if any(x in lower for x in ["история", "что меняли", "что делали"]):
-                return {
-                    "action": "get_vehicle_history",
-                    "result": self.fleet.get_vehicle_history(vehicle_id),
-                }
+                return {"action": "get_vehicle_history", "result": self.fleet.get_vehicle_history(vehicle_id)}
 
             if any(x in lower for x in ["то ", "техобслуж", "следующее то", "до то"]):
-                return {
-                    "action": "get_maintenance_status",
-                    "result": self.fleet.get_maintenance_status(vehicle_id),
-                }
+                return {"action": "get_maintenance_status", "result": self.fleet.get_maintenance_status(vehicle_id)}
 
             if any(x in lower for x in ["документ", "дк", "осаго", "пропуск"]):
-                return {
-                    "action": "get_vehicle_documents",
-                    "result": self.fleet.get_vehicle_documents(vehicle_id),
-                }
+                return {"action": "get_vehicle_documents", "result": self.fleet.get_vehicle_documents(vehicle_id)}
 
             if any(x in lower for x in ["топлив", "заправ", "расход"]):
-                return {
-                    "action": "get_fuel_transactions",
-                    "result": self.fleet.get_fuel_transactions(vehicle_id),
-                }
+                return {"action": "get_fuel_transactions", "result": self.fleet.get_fuel_transactions(vehicle_id)}
 
             if any(x in lower for x in ["запчаст", "детал", "артикул"]):
-                return {
-                    "action": "get_vehicle_parts",
-                    "result": self.fleet.get_vehicle_parts(vehicle_id),
-                }
+                return {"action": "get_vehicle_parts", "result": self.fleet.get_vehicle_parts(vehicle_id)}
 
             if any(x in lower for x in ["закуп", "заказ поставщик", "что ждём"]):
-                return {
-                    "action": "get_vehicle_purchases",
-                    "result": self.fleet.get_vehicle_purchases(vehicle_id),
-                }
+                return {"action": "get_vehicle_purchases", "result": self.fleet.get_vehicle_purchases(vehicle_id)}
 
             return {"action": "get_vehicle", "result": self.fleet.get_vehicle(vehicle_id)}
 
@@ -157,5 +145,4 @@ class MainAgent:
 
 
 def build_main_agent(fleet_backend: Any) -> MainAgent:
-    """Точка сборки: backend автопарка подключается через FleetConnector."""
     return MainAgent(FleetConnector(fleet_backend))
