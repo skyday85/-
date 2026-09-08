@@ -1,8 +1,10 @@
 from agents.delegation import DelegationEngine
 from agents.registry import AgentRegistry
+from app_shell.navigation import AppShellRegistry
 from connectors.http_fleet_backend import HttpFleetBackend
 from ecosystem.expense_bridge import ExpenseBridge
 from email.mail_collector_agent import MailCollectorAgent
+from email.providers import MailProviderRegistry
 from finance.invoices import InvoiceWorkflow
 from main_agent import build_main_agent
 from parts.catalogs import PartsCatalogRegistry
@@ -11,9 +13,10 @@ from parts.catalogs import PartsCatalogRegistry
 class MainAgentRuntime:
     """Production assembly for the organization-level Main Agent.
 
-    The Main Agent coordinates fleet, finance, parts, unified mail and specialized
-    agents. Source applications retain ownership of their data; no direct
-    database access is granted to the Main Agent or its child agents.
+    The Main Agent coordinates fleet, finance, parts, unified mail, shared client
+    navigation and specialized agents. Source applications retain ownership of
+    their data; no direct database access is granted to the Main Agent or its
+    child agents.
     """
 
     def __init__(self):
@@ -24,6 +27,8 @@ class MainAgentRuntime:
         self.agent_registry = AgentRegistry()
         self.delegation = DelegationEngine(self.agent_registry)
         self.mail_collector = MailCollectorAgent()
+        self.mail_providers = MailProviderRegistry()
+        self.app_shell = AppShellRegistry()
 
     def build_parts_search_plan(self, *, brand: str, query: str,
                                 model: str | None = None,
@@ -74,6 +79,16 @@ class MainAgentRuntime:
 
     def process_mail(self, email_id: str):
         return self.mail_collector.process_message(email_id)
+
+    def register_mail_provider(self, backend):
+        self.mail_providers.register(backend)
+
+    def list_mail_provider_accounts(self):
+        return self.mail_providers.list_accounts()
+
+    def client_manifest(self, device: str):
+        """Return the shared application navigation contract for macOS/iPhone."""
+        return self.app_shell.build_client_manifest(device)
 
 
 def build_runtime():
