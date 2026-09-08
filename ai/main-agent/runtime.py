@@ -4,9 +4,9 @@ from app_shell.client_api import UnifiedClientApi
 from app_shell.navigation import AppShellRegistry
 from connectors.http_fleet_backend import HttpFleetBackend
 from ecosystem.expense_bridge import ExpenseBridge
-from email.mail_collector_agent import MailCollectorAgent
-from email.providers import MailProviderRegistry
-from email.sync_service import UnifiedMailSyncService
+from mail_contour.mail_collector_agent import MailCollectorAgent
+from mail_contour.providers import MailProviderRegistry
+from mail_contour.sync_service import UnifiedMailSyncService
 from finance.invoices import InvoiceWorkflow
 from main_agent import build_main_agent
 from parts.catalogs import PartsCatalogRegistry
@@ -90,6 +90,24 @@ class MainAgentRuntime:
     def register_mail_provider(self, backend):
         self.mail_providers.register(backend)
         return self.mail_sync.refresh_accounts()
+
+    def begin_mail_authorization(self, *, provider: str, redirect_uri: str, state: str):
+        backend = self.mail_providers.get(provider)
+        return backend.build_authorization_url(redirect_uri=redirect_uri, state=state)
+
+    def complete_mail_authorization(self, *, provider: str, code: str,
+                                    redirect_uri: str, state: str):
+        backend = self.mail_providers.get(provider)
+        account = backend.complete_authorization(
+            code=code,
+            redirect_uri=redirect_uri,
+            state=state,
+        )
+        self.mail_sync.refresh_accounts()
+        return account
+
+    def mail_connection_state(self):
+        return self.mail_sync.state()
 
     def sync_mail(self):
         return self.mail_sync.sync_all()
