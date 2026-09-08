@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import os
 import secrets
+import time
 from dataclasses import asdict
 from typing import Literal, Optional
 
@@ -24,20 +29,51 @@ class AgentCommandRequest(BaseModel):
     text: str
 
 
-class OAuthStateStore:
-    def __init__(self) -> None:
-        self._values: dict[str, tuple[str, str]] = {}
+def _b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _b64decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+class SignedOAuthState:
+    """Short-lived stateless OAuth state safe across API restarts/replicas."""
+
+    MAX_AGE_SECONDS = 15 * 60
+
+    def __init__(self, secret: str) -> None:
+        if len(secret) < 32:
+            raise RuntimeError("APP_OAUTH_STATE_SECRET must contain at least 32 characters")
+        self.secret = secret.encode("utf-8")
 
     def issue(self, provider: str, return_to: str) -> str:
-        state = secrets.token_urlsafe(32)
-        self._values[state] = (provider, return_to if return_to.startswith("/") else "/mail")
-        return state
+        payload = {
+            "provider": provider,
+            "return_to": return_to if return_to.startswith("/") else "/mail",
+            "iat": int(time.time()),
+            "nonce": secrets.token_urlsafe(16),
+        }
+        encoded = _b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+        signature = _b64encode(hmac.new(self.secret, encoded.encode("ascii"), hashlib.sha256).digest())
+        return f"{encoded}.{signature}"
 
     def consume(self, state: str, provider: str) -> str:
-        value = self._values.pop(state, None)
-        if not value or value[0] != provider:
-            raise HTTPException(status_code=400, detail="Invalid OAuth state")
-        return value[1]
+        try:
+            encoded, signature = state.split(".", 1)
+            expected = _b64encode(hmac.new(self.secret, encoded.encode("ascii"), hashlib.sha256).digest())
+            if not hmac.compare_digest(signature, expected):
+                raise ValueError("signature")
+            payload = json.loads(_b64decode(encoded).decode("utf-8"))
+            age = int(time.time()) - int(payload["iat"])
+            if age < 0 or age > self.MAX_AGE_SECONDS:
+                raise ValueError("expired")
+            if payload.get("provider") != provider:
+                raise ValueError("provider")
+            return_to = str(payload.get("return_to") or "/mail")
+            return return_to if return_to.startswith("/") else "/mail"
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid or expired OAuth state") from exc
 
 
 def _is_local_origin(origin: str) -> bool:
@@ -54,9 +90,18 @@ def _configure_integrations(runtime) -> None:
     runtime.register_mail_provider(OutlookProviderAdapter(gateway))
 
 
+def _oauth_state_secret() -> str:
+    configured = os.getenv("APP_OAUTH_STATE_SECRET", "").strip()
+    if configured:
+        return configured
+    if os.getenv("APP_ENV", "development") == "production":
+        raise RuntimeError("APP_OAUTH_STATE_SECRET is required in production")
+    return secrets.token_urlsafe(48)
+
+
 runtime = build_runtime()
 _configure_integrations(runtime)
-oauth_states = OAuthStateStore()
+oauth_states = SignedOAuthState(_oauth_state_secret())
 
 app = FastAPI(title="Main Agent Unified API", version="0.1.0")
 
@@ -174,11 +219,19 @@ def begin_authorization(
 @app.get("/mail/oauth/{provider}/callback")
 def oauth_callback(
     provider: Literal["gmail", "outlook"],
-    code: str,
-    state: str,
     request: Request,
+    state: str,
+    code: Optional[str] = None,
+    error: Optional[str] = None,
 ):
     return_to = oauth_states.consume(state, provider)
+    client_base = os.getenv("PUBLIC_CLIENT_BASE_URL", "http://localhost:1420").rstrip("/")
+    if not client_base.startswith("https://") and not _is_local_origin(client_base):
+        raise HTTPException(status_code=500, detail="PUBLIC_CLIENT_BASE_URL must use HTTPS")
+    if error:
+        return RedirectResponse(f"{client_base}{return_to}?mail_error={provider}")
+    if not code:
+        raise HTTPException(status_code=400, detail="OAuth code is missing")
     redirect_uri = f"{public_api_base(request)}/mail/oauth/{provider}/callback"
     runtime.complete_mail_authorization(
         provider=provider,
@@ -186,9 +239,6 @@ def oauth_callback(
         redirect_uri=redirect_uri,
         state=state,
     )
-    client_base = os.getenv("PUBLIC_CLIENT_BASE_URL", "http://localhost:1420").rstrip("/")
-    if not client_base.startswith("https://") and not _is_local_origin(client_base):
-        raise HTTPException(status_code=500, detail="PUBLIC_CLIENT_BASE_URL must use HTTPS")
     return RedirectResponse(f"{client_base}{return_to}?mail_connected={provider}")
 
 
