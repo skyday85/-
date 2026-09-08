@@ -8,12 +8,12 @@ from typing import Any, Dict, Iterable, List, Optional
 class ClientContext:
     user_id: str
     device_id: str
-    platform: str  # macos | ios
+    platform: str  # mac | iphone
     app_version: str
 
 
 class UnifiedClientApi:
-    """Provider-neutral application facade shared by macOS and iOS clients.
+    """Provider-neutral application facade shared by Mac and iPhone clients.
 
     UI clients call one backend contract. They do not connect directly to mail,
     finance, fleet, sales, marketing or provider APIs.
@@ -25,7 +25,7 @@ class UnifiedClientApi:
     def bootstrap(self, context: ClientContext) -> Dict[str, Any]:
         return {
             "client": asdict(context),
-            "modules": self.runtime.app_shell.enabled_modules(context.platform),
+            "manifest": self.runtime.client_manifest(context.platform),
             "mail": {
                 "accounts": list(self.runtime.mail_collector.mailbox.accounts.keys()),
                 "unread_count": len(self.runtime.mail_sync.inbox(unread_only=True)),
