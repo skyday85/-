@@ -1,3 +1,5 @@
+from agents.delegation import DelegationEngine
+from agents.registry import AgentRegistry
 from connectors.http_fleet_backend import HttpFleetBackend
 from ecosystem.expense_bridge import ExpenseBridge
 from finance.invoices import InvoiceWorkflow
@@ -6,10 +8,11 @@ from parts.catalogs import PartsCatalogRegistry
 
 
 class MainAgentRuntime:
-    """Production assembly for cross-module Main Agent capabilities.
+    """Production assembly for the organization-level Main Agent.
 
-    Fleet access is service-to-service. Finance invoice classification and parts
-    catalog policy are orchestrated here without direct database access.
+    The Main Agent coordinates fleet, finance, parts and specialized agents.
+    Source applications retain ownership of their data; no direct database
+    access is granted to the Main Agent or its child agents.
     """
 
     def __init__(self):
@@ -17,6 +20,8 @@ class MainAgentRuntime:
         self.invoices = InvoiceWorkflow()
         self.parts_catalogs = PartsCatalogRegistry()
         self.expense_bridge = ExpenseBridge()
+        self.agent_registry = AgentRegistry()
+        self.delegation = DelegationEngine(self.agent_registry)
 
     def build_parts_search_plan(self, *, brand: str, query: str,
                                 model: str | None = None,
@@ -34,6 +39,21 @@ class MainAgentRuntime:
     def build_invoice_postings(self, invoice):
         plan = self.invoices.build_posting_plan(invoice)
         return self.expense_bridge.build_parts_invoice_postings(plan)
+
+    def list_specialized_agents(self):
+        return self.agent_registry.list_agents()
+
+    def delegate_task(self, *, agent_id: str, capability: str,
+                      instruction: str, context=None):
+        return self.delegation.delegate(
+            agent_id=agent_id,
+            capability=capability,
+            instruction=instruction,
+            context=context,
+        )
+
+    def complete_delegated_task(self, delegation_id: str, result):
+        return self.delegation.complete(delegation_id, result)
 
 
 def build_runtime():
