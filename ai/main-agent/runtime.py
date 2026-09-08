@@ -1,10 +1,12 @@
 from agents.delegation import DelegationEngine
 from agents.registry import AgentRegistry
+from app_shell.client_api import UnifiedClientApi
 from app_shell.navigation import AppShellRegistry
 from connectors.http_fleet_backend import HttpFleetBackend
 from ecosystem.expense_bridge import ExpenseBridge
 from email.mail_collector_agent import MailCollectorAgent
 from email.providers import MailProviderRegistry
+from email.sync_service import UnifiedMailSyncService
 from finance.invoices import InvoiceWorkflow
 from main_agent import build_main_agent
 from parts.catalogs import PartsCatalogRegistry
@@ -28,7 +30,12 @@ class MainAgentRuntime:
         self.delegation = DelegationEngine(self.agent_registry)
         self.mail_collector = MailCollectorAgent()
         self.mail_providers = MailProviderRegistry()
+        self.mail_sync = UnifiedMailSyncService(
+            self.mail_collector.mailbox,
+            self.mail_providers,
+        )
         self.app_shell = AppShellRegistry()
+        self.client_api = UnifiedClientApi(self)
 
     def build_parts_search_plan(self, *, brand: str, query: str,
                                 model: str | None = None,
@@ -75,19 +82,23 @@ class MainAgentRuntime:
         return self.mail_collector.ingest_messages(messages)
 
     def unified_inbox(self, *, unread_only: bool = False):
-        return self.mail_collector.inbox(unread_only=unread_only)
+        return self.mail_sync.inbox(unread_only=unread_only)
 
     def process_mail(self, email_id: str):
         return self.mail_collector.process_message(email_id)
 
     def register_mail_provider(self, backend):
         self.mail_providers.register(backend)
+        return self.mail_sync.refresh_accounts()
+
+    def sync_mail(self):
+        return self.mail_sync.sync_all()
 
     def list_mail_provider_accounts(self):
         return self.mail_providers.list_accounts()
 
     def client_manifest(self, device: str):
-        """Return the shared application navigation contract for macOS/iPhone."""
+        """Return the shared application navigation contract for Mac/iPhone."""
         return self.app_shell.build_client_manifest(device)
 
 
