@@ -19,7 +19,8 @@ from parts.catalogs import PartsCatalogRegistry
 
 class MainAgentRuntime:
     def __init__(self):
-        self.agent = build_main_agent(HttpFleetBackend())
+        self.fleet_backend = HttpFleetBackend()
+        self.agent = build_main_agent(self.fleet_backend)
         self.banking = BankingModule()
         self.invoices = InvoiceWorkflow()
         self.parts_catalogs = PartsCatalogRegistry()
@@ -78,8 +79,46 @@ class MainAgentRuntime:
     def unified_inbox(self, user_id: str, *, unread_only: bool = False, smart_folder: str | None = None):
         return self.mail_sync.inbox(user_id, unread_only=unread_only, smart_folder=smart_folder)
 
-    def process_mail(self, user_id: str, email_id: str):
-        return self.mail_collector.process_message(user_id, email_id)
+    def process_mail(self, user_id: str, email_id: str, *, organization_id: str | None = None):
+        message = self.mail_collector.process_message(user_id, email_id, organization_id=organization_id)
+        delivery = []
+        if organization_id and message.get("classification") == "parts_invoice_candidate":
+            for candidate in self.fleet_document_queue.list_pending(user_id):
+                if candidate["source_email_id"] != email_id or candidate["organization_id"] != organization_id:
+                    continue
+                try:
+                    persisted = self.fleet_backend.create_document_candidate(
+                        organization_id=organization_id,
+                        source_user_id=user_id,
+                        source_email_id=email_id,
+                        source_attachment_id=candidate["attachment_id"],
+                        original_name=candidate["filename"],
+                        mime_type=candidate.get("mime_type"),
+                        size_bytes=candidate.get("size_bytes"),
+                        document_type=candidate.get("document_type", "parts_invoice"),
+                        metadata={
+                            "sender": message.get("sender"),
+                            "subject": message.get("subject"),
+                            "classification": message.get("classification"),
+                            "source_account_id": message.get("account_id"),
+                        },
+                    )
+                    delivery.append({"status": "forwarded_to_fleet", "candidate": persisted})
+                except Exception:
+                    self.integration_outbox.publish(
+                        user_id=user_id,
+                        event_type="fleet_document_delivery_failed",
+                        source="unified_mail",
+                        source_id=email_id,
+                        title=candidate["filename"],
+                        payload={"organization_id": organization_id, "candidate_id": candidate["candidate_id"]},
+                        destinations=("main_agent",),
+                        priority="high",
+                    )
+                    delivery.append({"status": "delivery_failed", "candidate_id": candidate["candidate_id"]})
+        if delivery:
+            message["fleet_document_delivery"] = delivery
+        return message
 
     def register_mail_provider(self, backend):
         self.mail_providers.register(backend)
@@ -111,8 +150,14 @@ class MainAgentRuntime:
     def integration_events(self, user_id: str):
         return self.integration_outbox.list_for_user(user_id)
 
-    def fleet_document_candidates(self, user_id: str):
-        return self.fleet_document_queue.list_pending(user_id)
+    def fleet_document_candidates(self, organization_id: str):
+        return self.fleet_backend.list_document_candidates(organization_id)
+
+    def assign_fleet_document_candidate(self, *, organization_id: str, candidate_id: str, vehicle_id: str, purchase_request_id: str | None = None, repair_id: str | None = None):
+        return self.fleet_backend.assign_document_candidate(organization_id=organization_id, candidate_id=candidate_id, vehicle_id=vehicle_id, purchase_request_id=purchase_request_id, repair_id=repair_id)
+
+    def dismiss_fleet_document_candidate(self, *, organization_id: str, candidate_id: str):
+        return self.fleet_backend.dismiss_document_candidate(organization_id=organization_id, candidate_id=candidate_id)
 
     def client_manifest(self, device: str):
         return self.app_shell.build_client_manifest(device)
