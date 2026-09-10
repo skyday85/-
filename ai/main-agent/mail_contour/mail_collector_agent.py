@@ -24,20 +24,44 @@ class MailCollectorAgent:
     def inbox(self, user_id: str, *, unread_only: bool = False, smart_folder: Optional[str] = None) -> List[Dict[str, Any]]:
         return self.mailbox.unified_inbox(user_id, unread_only=unread_only, smart_folder=smart_folder)
 
-    def process_message(self, user_id: str, email_id: str) -> Dict[str, Any]:
+    def process_message(self, user_id: str, email_id: str, *, organization_id: Optional[str] = None) -> Dict[str, Any]:
         message = self.mailbox.classify_and_route(user_id, email_id)
         event_type = message.get("integration_event_type")
         if event_type and self.integration_outbox is not None:
             destinations = ("messenger",) if event_type == "transport_request_received" else ("main_agent",)
-            self.integration_outbox.publish(user_id=user_id, event_type=event_type, source="unified_mail", source_id=email_id, title=message.get("subject") or event_type, payload={"email_id": email_id, "sender": message.get("sender"), "subject": message.get("subject"), "smart_folder": message.get("smart_folder"), "classification": message.get("classification")}, destinations=destinations, priority=message.get("importance", "normal"))
+            self.integration_outbox.publish(
+                user_id=user_id,
+                event_type=event_type,
+                source="unified_mail",
+                source_id=email_id,
+                title=message.get("subject") or event_type,
+                payload={
+                    "organization_id": organization_id,
+                    "email_id": email_id,
+                    "sender": message.get("sender"),
+                    "subject": message.get("subject"),
+                    "smart_folder": message.get("smart_folder"),
+                    "classification": message.get("classification"),
+                },
+                destinations=destinations,
+                priority=message.get("importance", "normal"),
+            )
 
-        if message.get("classification") == "parts_invoice_candidate" and self.fleet_document_queue is not None:
+        if organization_id and message.get("classification") == "parts_invoice_candidate" and self.fleet_document_queue is not None:
             for attachment in message.get("attachments", []):
                 filename = str(attachment.get("filename", ""))
                 mime_type = str(attachment.get("mime_type", ""))
                 if filename.lower().endswith((".pdf", ".xml", ".xlsx", ".xls")) or mime_type in {"application/pdf", "application/xml", "text/xml"}:
-                    self.fleet_document_queue.add_invoice_candidate(user_id=user_id, source_email_id=email_id, attachment_id=str(attachment["attachment_id"]), filename=filename or "document")
+                    self.fleet_document_queue.add_invoice_candidate(
+                        organization_id=organization_id,
+                        user_id=user_id,
+                        source_email_id=email_id,
+                        attachment_id=str(attachment["attachment_id"]),
+                        filename=filename or "document",
+                        mime_type=mime_type or None,
+                        size_bytes=attachment.get("size_bytes"),
+                    )
         return message
 
-    def process_unread(self, user_id: str) -> List[Dict[str, Any]]:
-        return [self.process_message(user_id, x["email_id"]) for x in self.inbox(user_id, unread_only=True)]
+    def process_unread(self, user_id: str, *, organization_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        return [self.process_message(user_id, x["email_id"], organization_id=organization_id) for x in self.inbox(user_id, unread_only=True)]
