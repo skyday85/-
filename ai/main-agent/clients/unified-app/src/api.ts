@@ -20,7 +20,8 @@ export type BootstrapResponse = {
     mail_entry: string;
   };
   mail: {
-    accounts: string[];
+    accounts: Array<Record<string, unknown>>;
+    connections: Array<Record<string, unknown>>;
     unread_count: number;
   };
   agents: Array<Record<string, unknown>>;
@@ -37,22 +38,28 @@ export type MailMessage = {
   route_to?: string | null;
 };
 
-export type AgentCommandResponse = {
-  action: string;
-  result: unknown;
+export type BankClassification = {
+  transaction_id: string;
+  operation_type: string;
+  category?: string | null;
+  confidence: number;
+  review_status: 'needs_review' | 'confirmed';
+  rationale: string;
+  confirmed_by_user: boolean;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
-const APP_VERSION = import.meta.env.VITE_APP_VERSION || 'development';
+export type BankTransaction = {
+  transaction_id: string;
+  date: string;
+  amount: string;
+  direction: 'income' | 'expense';
+  counterparty_name: string;
+  purpose: string;
+  bank_reference?: string | null;
+  classification?: BankClassification | null;
+};
 
-function deviceId(): string {
-  const key = 'main-agent-device-id';
-  const current = localStorage.getItem(key);
-  if (current) return current;
-  const created = crypto.randomUUID();
-  localStorage.setItem(key, created);
-  return created;
-}
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://api.example.invalid';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -60,15 +67,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      'X-Device-Id': deviceId(),
-      'X-App-Version': APP_VERSION,
       ...(init?.headers || {}),
     },
   });
-  if (!response.ok) {
-    const detail = await response.json().catch(() => null);
-    throw new Error(detail?.detail || `API ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`API ${response.status}`);
   return response.json() as Promise<T>;
 }
 
@@ -80,14 +82,6 @@ export function getUnifiedInbox(params: URLSearchParams = new URLSearchParams())
   return request<MailMessage[]>(`/mail/inbox?${params.toString()}`);
 }
 
-export function syncMail() {
-  return request<{ total_imported: number }>(`/mail/sync`, { method: 'POST' });
-}
-
-export function processMail(emailId: string) {
-  return request<MailMessage>(`/mail/messages/${encodeURIComponent(emailId)}/process`, { method: 'POST' });
-}
-
 export function beginMailAuthorization(provider: 'gmail' | 'outlook') {
   return request<{ authorization_url: string }>(`/mail/accounts/${provider}/authorize`, {
     method: 'POST',
@@ -95,9 +89,37 @@ export function beginMailAuthorization(provider: 'gmail' | 'outlook') {
   });
 }
 
+export function refreshMail() {
+  return request<Record<string, unknown>>('/mail/sync', { method: 'POST' });
+}
+
+export function processMailMessage(emailId: string) {
+  return request<Record<string, unknown>>(`/mail/messages/${encodeURIComponent(emailId)}/process`, { method: 'POST' });
+}
+
 export function sendAgentCommand(text: string) {
-  return request<AgentCommandResponse>(`/agent/commands`, {
+  return request<Record<string, unknown>>('/agent/commands', {
     method: 'POST',
     body: JSON.stringify({ text }),
+  });
+}
+
+export function getFinanceReviewQueue() {
+  return request<BankTransaction[]>('/finance/review');
+}
+
+export function classifyBankTransaction(transactionId: string) {
+  return request<BankClassification>(`/finance/transactions/${encodeURIComponent(transactionId)}/classify`, {
+    method: 'POST',
+  });
+}
+
+export function confirmBankClassification(
+  transactionId: string,
+  changes: Partial<Pick<BankClassification, 'operation_type' | 'category' | 'rationale'>> = {},
+) {
+  return request<BankClassification>(`/finance/transactions/${encodeURIComponent(transactionId)}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify(changes),
   });
 }
