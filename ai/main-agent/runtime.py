@@ -9,6 +9,7 @@ from mail_contour.mail_collector_agent import MailCollectorAgent
 from mail_contour.provider_adapters import GmailProviderAdapter, OutlookProviderAdapter
 from mail_contour.providers import MailProviderRegistry
 from mail_contour.sync_service import UnifiedMailSyncService
+from finance.banking import BankingModule
 from finance.invoices import InvoiceWorkflow
 from main_agent import build_main_agent
 from parts.catalogs import PartsCatalogRegistry
@@ -25,6 +26,7 @@ class MainAgentRuntime:
 
     def __init__(self):
         self.agent = build_main_agent(HttpFleetBackend())
+        self.banking = BankingModule()
         self.invoices = InvoiceWorkflow()
         self.parts_catalogs = PartsCatalogRegistry()
         self.expense_bridge = ExpenseBridge()
@@ -56,6 +58,21 @@ class MainAgentRuntime:
     def build_invoice_postings(self, invoice):
         plan = self.invoices.build_posting_plan(invoice)
         return self.expense_bridge.build_parts_invoice_postings(plan)
+
+    def import_bank_transactions(self, rows):
+        return self.banking.import_transactions(rows)
+
+    def list_bank_transactions(self):
+        return self.banking.get_bank_transactions()
+
+    def propose_bank_classification(self, transaction_id: str):
+        return self.banking.classify_bank_transaction(transaction_id)
+
+    def confirm_bank_classification(self, transaction_id: str, **changes):
+        return self.banking.confirm_classification(transaction_id, **changes)
+
+    def finance_review_queue(self):
+        return self.banking.get_needs_review()
 
     def list_specialized_agents(self):
         return self.agent_registry.list_agents()
