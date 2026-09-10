@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 @dataclass
 class OAuthTokenRecord:
+    owner_user_id: str
     provider: str
     account_id: str
     address: str
@@ -22,11 +23,7 @@ class OAuthTokenRecord:
 
 
 class EncryptedFileTokenStore:
-    """Minimal encrypted token vault for the standalone mail gateway.
-
-    Production may replace this with a managed secrets/KMS-backed repository,
-    but the gateway API does not expose provider tokens to the Main Agent.
-    """
+    """Encrypted token vault with user-level ownership isolation."""
 
     def __init__(self, path: str | None = None, key: str | None = None) -> None:
         self.path = Path(path or os.environ.get("MAIL_GATEWAY_TOKEN_STORE", "./var/mail_tokens.bin"))
@@ -54,24 +51,24 @@ class EncryptedFileTokenStore:
         tmp.replace(self.path)
 
     @staticmethod
-    def _key(provider: str, account_id: str) -> str:
-        return f"{provider.lower()}:{account_id}"
+    def _key(user_id: str, provider: str, account_id: str) -> str:
+        return f"{user_id}:{provider.lower()}:{account_id}"
 
     def upsert(self, record: OAuthTokenRecord) -> None:
         data = self._load()
         encoded = asdict(record)
         encoded["scopes"] = list(record.scopes)
-        data[self._key(record.provider, record.account_id)] = encoded
+        data[self._key(record.owner_user_id, record.provider, record.account_id)] = encoded
         self._save(data)
 
-    def get(self, provider: str, account_id: str) -> OAuthTokenRecord:
+    def get(self, user_id: str, provider: str, account_id: str) -> OAuthTokenRecord:
         data = self._load()
-        raw = data[self._key(provider, account_id)]
+        raw = dict(data[self._key(user_id, provider, account_id)])
         raw["scopes"] = tuple(raw.get("scopes", []))
         return OAuthTokenRecord(**raw)
 
-    def list_provider(self, provider: str) -> list[OAuthTokenRecord]:
-        prefix = provider.lower() + ":"
+    def list_provider(self, user_id: str, provider: str) -> list[OAuthTokenRecord]:
+        prefix = f"{user_id}:{provider.lower()}:"
         result = []
         for key, raw in self._load().items():
             if not key.startswith(prefix):
