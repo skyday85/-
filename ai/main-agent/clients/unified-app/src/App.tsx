@@ -2,11 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   beginMailAuthorization,
   bootstrap,
+  classifyBankTransaction,
+  confirmBankClassification,
+  getFinanceReviewQueue,
   getUnifiedInbox,
-  processMail,
+  processMailMessage,
+  refreshMail as syncMail,
   sendAgentCommand,
-  syncMail,
-  type AgentCommandResponse,
+  type BankTransaction,
   type BootstrapResponse,
   type MailMessage,
 } from './api';
@@ -19,20 +22,27 @@ export default function App() {
   const platform = useMemo(detectPlatform, []);
   const [boot, setBoot] = useState<BootstrapResponse | null>(null);
   const [mail, setMail] = useState<MailMessage[]>([]);
+  const [financeReview, setFinanceReview] = useState<BankTransaction[]>([]);
   const [active, setActive] = useState('main_agent');
   const [error, setError] = useState<string | null>(null);
   const [command, setCommand] = useState('');
-  const [agentResult, setAgentResult] = useState<AgentCommandResponse | null>(null);
+  const [agentResult, setAgentResult] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function reload() {
+  async function reloadCore() {
     const [b, m] = await Promise.all([bootstrap(platform), getUnifiedInbox()]);
     setBoot(b);
     setMail(m);
   }
 
+  async function reloadFinance() {
+    setFinanceReview(await getFinanceReviewQueue());
+  }
+
   useEffect(() => {
-    reload().catch((e) => setError(e instanceof Error ? e.message : 'Ошибка загрузки'));
+    Promise.all([reloadCore(), reloadFinance()]).catch((e) =>
+      setError(e instanceof Error ? e.message : 'Ошибка загрузки'),
+    );
   }, [platform]);
 
   async function connect(provider: 'gmail' | 'outlook') {
@@ -50,7 +60,7 @@ export default function App() {
       setBusy(true);
       setError(null);
       await syncMail();
-      await reload();
+      await reloadCore();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось синхронизировать почту');
     } finally {
@@ -61,7 +71,7 @@ export default function App() {
   async function classifyMail(emailId: string) {
     try {
       setError(null);
-      await processMail(emailId);
+      await processMailMessage(emailId);
       setMail(await getUnifiedInbox());
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось обработать письмо');
@@ -79,6 +89,36 @@ export default function App() {
       setCommand('');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Главный агент недоступен');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function proposeFinance(transactionId: string) {
+    try {
+      setBusy(true);
+      setError(null);
+      await classifyBankTransaction(transactionId);
+      await reloadFinance();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось классифицировать операцию');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmFinance(item: BankTransaction) {
+    if (!item.classification) return;
+    try {
+      setBusy(true);
+      setError(null);
+      await confirmBankClassification(item.transaction_id, {
+        operation_type: item.classification.operation_type,
+        category: item.classification.category ?? undefined,
+      });
+      await reloadFinance();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось подтвердить классификацию');
     } finally {
       setBusy(false);
     }
@@ -104,6 +144,7 @@ export default function App() {
             <button key={item.module_id} className={active === item.module_id ? 'active' : ''} onClick={() => setActive(item.module_id)}>
               <span>{item.title}</span>
               {item.module_id === 'mail' && boot?.mail.unread_count ? <b>{boot.mail.unread_count}</b> : null}
+              {item.module_id === 'finance' && financeReview.length ? <b>{financeReview.length}</b> : null}
             </button>
           ))}
         </nav>
@@ -133,16 +174,11 @@ export default function App() {
               <button disabled={busy || !command.trim()} onClick={submitCommand}>
                 {busy ? 'Выполняю…' : 'Отправить Главному агенту'}
               </button>
-              {agentResult ? (
-                <div className="agent-result">
-                  <strong>{agentResult.action}</strong>
-                  <pre>{JSON.stringify(agentResult.result, null, 2)}</pre>
-                </div>
-              ) : null}
+              {agentResult ? <pre className="agent-result">{JSON.stringify(agentResult, null, 2)}</pre> : null}
             </div>
             <div className="status-grid">
               <article><span>Почта</span><strong>{boot?.mail.unread_count ?? '—'}</strong><small>непрочитанных</small></article>
-              <article><span>Подключено почт</span><strong>{boot?.mail.accounts.length ?? '—'}</strong><small>единая лента</small></article>
+              <article><span>Финансы</span><strong>{financeReview.length}</strong><small>нужно подтвердить</small></article>
               <article><span>Устройство</span><strong>{platform === 'iphone' ? 'iPhone' : 'Mac'}</strong><small>общий backend</small></article>
             </div>
           </section>
@@ -179,7 +215,45 @@ export default function App() {
           </section>
         )}
 
-        {!['main_agent', 'mail'].includes(active) && (
+        {active === 'finance' && (
+          <section className="mail-layout">
+            <div className="mail-toolbar">
+              <div>
+                <h2>Операции на подтверждение</h2>
+                <p>Агент предлагает классификацию, окончательное решение остаётся за пользователем.</p>
+              </div>
+              <button disabled={busy} onClick={() => reloadFinance().catch(() => setError('Не удалось обновить финансы'))}>Обновить</button>
+            </div>
+            <div className="mail-list">
+              {financeReview.length === 0 ? (
+                <div className="empty-state">Нет операций, ожидающих подтверждения.</div>
+              ) : financeReview.map((item) => (
+                <article key={item.transaction_id} className="mail-row">
+                  <div className="mail-source">{item.direction === 'income' ? 'Поступление' : 'Списание'}</div>
+                  <div className="mail-content">
+                    <strong>{item.counterparty_name || 'Без контрагента'} · {item.amount}</strong>
+                    <span>{item.purpose || 'Без назначения платежа'}</span>
+                    <small>
+                      {item.classification
+                        ? `${item.classification.category || item.classification.operation_type} · уверенность ${Math.round(item.classification.confidence * 100)}%`
+                        : 'Классификация ещё не предложена'}
+                    </small>
+                    {item.classification ? <small>{item.classification.rationale}</small> : null}
+                  </div>
+                  <div className="connect-actions">
+                    {!item.classification ? (
+                      <button disabled={busy} onClick={() => proposeFinance(item.transaction_id)}>Предложить</button>
+                    ) : (
+                      <button disabled={busy} onClick={() => confirmFinance(item)}>Подтвердить</button>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {!['main_agent', 'mail', 'finance'].includes(active) && (
           <section className="placeholder">
             <h2>{nav.find((x) => x.module_id === active)?.title}</h2>
             <p>Модуль подключён к общей навигации. Следующий шаг — вывести его рабочие данные через общий API.</p>
