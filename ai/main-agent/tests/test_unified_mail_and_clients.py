@@ -9,6 +9,7 @@ from mail_contour.unified_mailbox import UnifiedMailbox
 
 USER_A = "user-a"
 USER_B = "user-b"
+ORG = "00000000-0000-0000-0000-000000000001"
 
 
 class FakeMailProvider:
@@ -73,12 +74,13 @@ def test_transport_request_moves_to_important_folder_and_emits_messenger_event()
     sync.sync_all(USER_A)
     outbox = IntegrationOutbox()
     collector = MailCollectorAgent(mailbox, integration_outbox=outbox)
-    result = collector.process_message(USER_A, f"mail-2-{USER_A}")
+    result = collector.process_message(USER_A, f"mail-2-{USER_A}", organization_id=ORG)
     assert result["smart_folder"] == "important_requests"
     assert result["importance"] == "high"
     assert result["classification"] == "transport_request"
     event = outbox.list_for_user(USER_A)[0]
     assert event["event_type"] == "transport_request_received"
+    assert event["payload"]["organization_id"] == ORG
     assert "messenger" in event["destinations"]
 
 
@@ -87,11 +89,12 @@ def test_parts_invoice_moves_to_procurement_and_creates_fleet_document_candidate
     sync.sync_all(USER_A)
     queue = FleetDocumentQueue()
     collector = MailCollectorAgent(mailbox, fleet_document_queue=queue)
-    result = collector.process_message(USER_A, f"mail-1-{USER_A}")
+    result = collector.process_message(USER_A, f"mail-1-{USER_A}", organization_id=ORG)
     assert result["smart_folder"] == "procurement"
     assert result["classification"] == "parts_invoice_candidate"
     pending = queue.list_pending(USER_A)
     assert len(pending) == 1
+    assert pending[0]["organization_id"] == ORG
     assert pending[0]["filename"] == "invoice.pdf"
     assert pending[0]["status"] == "pending_assignment"
 
