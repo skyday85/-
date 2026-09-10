@@ -2,18 +2,21 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 
 @dataclass
 class FleetDocumentCandidate:
     candidate_id: str
+    organization_id: str
     user_id: str
     source_email_id: str
     attachment_id: str
     filename: str
     document_type: str
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
     suggested_vehicle_id: Optional[str] = None
     suggested_purchase_id: Optional[str] = None
     suggested_repair_id: Optional[str] = None
@@ -22,18 +25,20 @@ class FleetDocumentCandidate:
 
 
 class FleetDocumentQueue:
-    """Staging area before a mail attachment becomes a fleet document.
-
-    A candidate may later be assigned to a vehicle/purchase/repair or dismissed.
-    The queue intentionally does not write directly to the fleet database.
-    """
+    """User-originated, organization-scoped staging before fleet import."""
 
     def __init__(self) -> None:
         self._items: Dict[str, FleetDocumentCandidate] = {}
+        self._source_index: Dict[Tuple[str, str, str, str], str] = {}
 
-    def add_invoice_candidate(self, *, user_id: str, source_email_id: str, attachment_id: str, filename: str, suggested_vehicle_id: Optional[str] = None) -> Dict[str, Any]:
-        item = FleetDocumentCandidate(candidate_id=str(uuid4()), user_id=user_id, source_email_id=source_email_id, attachment_id=attachment_id, filename=filename, document_type="parts_invoice", suggested_vehicle_id=suggested_vehicle_id)
+    def add_invoice_candidate(self, *, organization_id: str, user_id: str, source_email_id: str, attachment_id: str, filename: str, mime_type: Optional[str] = None, size_bytes: Optional[int] = None, suggested_vehicle_id: Optional[str] = None) -> Dict[str, Any]:
+        source_key = (organization_id, user_id, source_email_id, attachment_id)
+        existing_id = self._source_index.get(source_key)
+        if existing_id:
+            return asdict(self._items[existing_id])
+        item = FleetDocumentCandidate(candidate_id=str(uuid4()), organization_id=organization_id, user_id=user_id, source_email_id=source_email_id, attachment_id=attachment_id, filename=filename, document_type="parts_invoice", mime_type=mime_type, size_bytes=size_bytes, suggested_vehicle_id=suggested_vehicle_id)
         self._items[item.candidate_id] = item
+        self._source_index[source_key] = item.candidate_id
         return asdict(item)
 
     def list_pending(self, user_id: str) -> List[Dict[str, Any]]:
