@@ -41,8 +41,8 @@ class UnifiedClientApi:
     def get_mail_message(self, user_id: str, email_id: str) -> Dict[str, Any]:
         return self.runtime.mail_collector.mailbox.get_message(user_id, email_id)
 
-    def process_mail_message(self, user_id: str, email_id: str) -> Dict[str, Any]:
-        return self.runtime.process_mail(user_id, email_id)
+    def process_mail_message(self, user_id: str, email_id: str, *, organization_id: str | None = None) -> Dict[str, Any]:
+        return self.runtime.process_mail(user_id, email_id, organization_id=organization_id)
 
     def refresh_mail(self, user_id: str) -> Dict[str, Any]:
         self.runtime.refresh_mail_accounts(user_id)
@@ -54,8 +54,8 @@ class UnifiedClientApi:
     def get_integration_events(self, user_id: str) -> List[Dict[str, Any]]:
         return self.runtime.integration_events(user_id)
 
-    def get_fleet_document_candidates(self, user_id: str) -> List[Dict[str, Any]]:
-        return self.runtime.fleet_document_candidates(user_id)
+    def get_fleet_document_candidates(self, organization_id: str) -> List[Dict[str, Any]]:
+        return self.runtime.fleet_document_candidates(organization_id)
 
 
 @dataclass(frozen=True)
