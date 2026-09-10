@@ -19,6 +19,8 @@ class MailSyncState:
 
 
 class UnifiedMailSyncService:
+    """Provider synchronization only; business processing happens in runtime."""
+
     def __init__(self, mailbox: UnifiedMailbox, providers: MailProviderRegistry) -> None:
         self.mailbox = mailbox
         self.providers = providers
@@ -38,11 +40,19 @@ class UnifiedMailSyncService:
         state = self._sync_state.setdefault((user_id, account_id), MailSyncState(user_id=user_id, account_id=account_id, provider=account.provider))
         try:
             page = backend.fetch_messages(user_id, account_id, cursor=state.cursor, limit=limit)
-            imported = self.mailbox.ingest(user_id, page.get("messages", []))
+            imported_rows = self.mailbox.ingest(user_id, page.get("messages", []))
+            imported_ids = [str(row["email_id"]) for row in imported_rows]
             state.cursor = page.get("next_cursor") or state.cursor
             state.last_sync_at = datetime.now(timezone.utc).isoformat()
             state.last_error = None
-            return {"account_id": account_id, "provider": account.provider, "imported": len(imported), "cursor": state.cursor, "last_sync_at": state.last_sync_at}
+            return {
+                "account_id": account_id,
+                "provider": account.provider,
+                "imported": len(imported_ids),
+                "imported_email_ids": imported_ids,
+                "cursor": state.cursor,
+                "last_sync_at": state.last_sync_at,
+            }
         except Exception:
             state.last_sync_at = datetime.now(timezone.utc).isoformat()
             state.last_error = "Mail synchronization failed"
@@ -50,10 +60,17 @@ class UnifiedMailSyncService:
 
     def sync_all(self, user_id: str, *, limit_per_account: int = 100) -> Dict[str, Any]:
         results = []
-        for (owner, account_id), account in self.mailbox.accounts.items():
+        imported_email_ids: List[str] = []
+        for (owner, account_id), account in list(self.mailbox.accounts.items()):
             if owner == user_id and account.active:
-                results.append(self.sync_account(user_id, account_id, limit=limit_per_account))
-        return {"accounts": results, "total_imported": sum(x["imported"] for x in results)}
+                result = self.sync_account(user_id, account_id, limit=limit_per_account)
+                results.append(result)
+                imported_email_ids.extend(result["imported_email_ids"])
+        return {
+            "accounts": results,
+            "total_imported": len(imported_email_ids),
+            "imported_email_ids": imported_email_ids,
+        }
 
     def inbox(self, user_id: str, *, account_ids: Optional[Iterable[str]] = None, unread_only: bool = False, classification: Optional[str] = None, routed_to: Optional[str] = None, search: Optional[str] = None, smart_folder: Optional[str] = None) -> List[Dict[str, Any]]:
         allowed = set(account_ids or [])
@@ -75,4 +92,10 @@ class UnifiedMailSyncService:
         return result
 
     def state(self, user_id: str) -> Dict[str, Any]:
-        return {"accounts": [asdict(x) for (owner, _), x in self.mailbox.accounts.items() if owner == user_id], "providers": self.providers.list_providers(), "connections": [asdict(x) for x in self.providers.connection_states(user_id)], "sync": {account_id: asdict(value) for (owner, account_id), value in self._sync_state.items() if owner == user_id}, "message_count": len([1 for owner, _ in self.mailbox.messages if owner == user_id])}
+        return {
+            "accounts": [asdict(x) for (owner, _), x in self.mailbox.accounts.items() if owner == user_id],
+            "providers": self.providers.list_providers(),
+            "connections": [asdict(x) for x in self.providers.connection_states(user_id)],
+            "sync": {account_id: asdict(value) for (owner, account_id), value in self._sync_state.items() if owner == user_id},
+            "message_count": len([1 for owner, _ in self.mailbox.messages if owner == user_id]),
+        }
