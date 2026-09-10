@@ -133,6 +133,24 @@ class MainAgentRuntime:
             message["fleet_document_delivery"] = fleet_delivery
         return message
 
+    def sync_mail(self, user_id: str, *, organization_id: str | None = None):
+        """Sync provider mail and immediately classify/route every newly imported message."""
+        self.refresh_mail_accounts(user_id)
+        sync_result = self.mail_sync.sync_all(user_id)
+        processed = []
+        failed = []
+        for email_id in sync_result.get("imported_email_ids", []):
+            try:
+                processed.append(self.process_mail(user_id, email_id, organization_id=organization_id))
+            except Exception:
+                failed.append(email_id)
+        return {
+            **sync_result,
+            "processed": len(processed),
+            "processing_failed": len(failed),
+            "processing_failed_email_ids": failed,
+        }
+
     def register_mail_provider(self, backend):
         self.mail_providers.register(backend)
 
@@ -156,9 +174,6 @@ class MainAgentRuntime:
 
     def mail_accounts_overview(self, user_id: str):
         return self.mail_accounts_view.overview(user_id)
-
-    def sync_mail(self, user_id: str):
-        return self.mail_sync.sync_all(user_id)
 
     def integration_events(self, user_id: str):
         return self.integration_outbox.list_for_user(user_id)
