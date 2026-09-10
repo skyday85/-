@@ -1,0 +1,84 @@
+name: Main Agent Unified App CI
+
+on:
+  pull_request:
+    paths:
+      - 'ai/main-agent/**'
+      - '.github/workflows/main-agent-unified-app-ci.yml'
+  push:
+    branches:
+      - main
+      - feature/unified-app-shell
+    paths:
+      - 'ai/main-agent/**'
+      - '.github/workflows/main-agent-unified-app-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai/main-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            ai/main-agent/requirements-http.txt
+            ai/main-agent/mail_gateway/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install -r requirements-http.txt
+          pip install -r mail_gateway/requirements.txt
+      - name: Compile Python sources
+        run: python -m compileall -q .
+      - name: Run tests
+        run: pytest -q
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai/main-agent/clients/unified-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install
+      - name: Build frontend
+        env:
+          VITE_API_BASE_URL: https://api.example.com
+        run: npm run build
+
+  tauri-rust-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai/main-agent/clients/unified-app/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check Rust shell
+        run: cargo check
