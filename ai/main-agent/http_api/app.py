@@ -7,13 +7,12 @@ import json
 import os
 import secrets
 import time
-from dataclasses import asdict
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app_shell.client_api import ClientContext
 from mail_contour.http_gateway import HttpOAuthMailGateway
@@ -27,6 +26,26 @@ class AuthorizeRequest(BaseModel):
 
 class AgentCommandRequest(BaseModel):
     text: str
+
+
+class BankTransactionPayload(BaseModel):
+    transaction_id: str = Field(min_length=1)
+    date: str = Field(min_length=1)
+    amount: str = Field(min_length=1)
+    direction: Literal["income", "expense"]
+    counterparty_name: str = ""
+    purpose: str = ""
+    bank_reference: Optional[str] = None
+
+
+class BankImportRequest(BaseModel):
+    transactions: list[BankTransactionPayload]
+
+
+class ConfirmClassificationRequest(BaseModel):
+    operation_type: Optional[str] = None
+    category: Optional[str] = None
+    rationale: Optional[str] = None
 
 
 def _b64encode(value: bytes) -> str:
@@ -103,7 +122,7 @@ runtime = build_runtime()
 _configure_integrations(runtime)
 oauth_states = SignedOAuthState(_oauth_state_secret())
 
-app = FastAPI(title="Main Agent Unified API", version="0.1.0")
+app = FastAPI(title="Main Agent Unified API", version="0.2.0")
 
 allowed_origins = [x.strip() for x in os.getenv("APP_ALLOWED_ORIGINS", "").split(",") if x.strip()]
 if os.getenv("APP_ENV", "development") == "development":
@@ -156,6 +175,46 @@ def bootstrap(
         app_version=request.headers.get("X-App-Version", "development"),
     )
     return runtime.client_api.bootstrap(context)
+
+
+@app.get("/finance/transactions")
+def finance_transactions(_user: str = Depends(authenticated_user)):
+    return runtime.list_bank_transactions()
+
+
+@app.get("/finance/review")
+def finance_review(_user: str = Depends(authenticated_user)):
+    return runtime.finance_review_queue()
+
+
+@app.post("/finance/import")
+def finance_import(payload: BankImportRequest, _user: str = Depends(authenticated_user)):
+    return {"imported": runtime.import_bank_transactions([x.model_dump() for x in payload.transactions])}
+
+
+@app.post("/finance/transactions/{transaction_id}/classify")
+def finance_classify(transaction_id: str, _user: str = Depends(authenticated_user)):
+    try:
+        return runtime.propose_bank_classification(transaction_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Bank transaction not found") from exc
+
+
+@app.post("/finance/transactions/{transaction_id}/confirm")
+def finance_confirm(
+    transaction_id: str,
+    payload: ConfirmClassificationRequest,
+    _user: str = Depends(authenticated_user),
+):
+    try:
+        return runtime.confirm_bank_classification(
+            transaction_id,
+            operation_type=payload.operation_type,
+            category=payload.category,
+            rationale=payload.rationale,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Bank transaction not found") from exc
 
 
 @app.get("/mail/inbox")
