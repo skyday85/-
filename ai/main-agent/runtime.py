@@ -1,3 +1,5 @@
+import os
+
 from agents.delegation import DelegationEngine
 from agents.registry import AgentRegistry
 from app_shell.client_api import UnifiedClientApi
@@ -9,6 +11,7 @@ from finance.banking import BankingModule
 from finance.invoices import InvoiceWorkflow
 from integrations.events import IntegrationOutbox
 from integrations.fleet_documents import FleetDocumentQueue
+from integrations.http_dispatcher import HttpIntegrationDispatcher
 from mail_contour.mail_collector_agent import MailCollectorAgent
 from mail_contour.provider_adapters import GmailProviderAdapter, OutlookProviderAdapter
 from mail_contour.providers import MailProviderRegistry
@@ -28,6 +31,7 @@ class MainAgentRuntime:
         self.agent_registry = AgentRegistry()
         self.delegation = DelegationEngine(self.agent_registry)
         self.integration_outbox = IntegrationOutbox()
+        self.integration_dispatcher = self._build_integration_dispatcher()
         self.fleet_document_queue = FleetDocumentQueue()
         self.mail_collector = MailCollectorAgent(integration_outbox=self.integration_outbox, fleet_document_queue=self.fleet_document_queue)
         self.mail_providers = MailProviderRegistry()
@@ -35,6 +39,14 @@ class MainAgentRuntime:
         self.app_shell = AppShellRegistry()
         self.client_api = UnifiedClientApi(self)
         self.mail_accounts_view = MailAccountsViewModel(self)
+
+    @staticmethod
+    def _build_integration_dispatcher():
+        base_url = os.getenv("INTEGRATION_GATEWAY_BASE_URL", "").strip()
+        token = os.getenv("INTEGRATION_GATEWAY_SERVICE_TOKEN", "").strip()
+        if not base_url or not token:
+            return None
+        return HttpIntegrationDispatcher(base_url, token)
 
     def build_parts_search_plan(self, *, brand: str, query: str, model: str | None = None, vin: str | None = None):
         return self.parts_catalogs.build_search_plan(brand=brand, model=model, vin=vin, query=query)
@@ -81,7 +93,20 @@ class MainAgentRuntime:
 
     def process_mail(self, user_id: str, email_id: str, *, organization_id: str | None = None):
         message = self.mail_collector.process_message(user_id, email_id, organization_id=organization_id)
-        delivery = []
+        integration_delivery = []
+        if self.integration_dispatcher is not None:
+            for event in self.integration_outbox.pending(destination="messenger"):
+                if event["user_id"] != user_id or event["source_id"] != email_id:
+                    continue
+                try:
+                    response = self.integration_dispatcher.dispatch(event)
+                    self.integration_outbox.mark_attempt(event["event_id"], delivered=True)
+                    integration_delivery.append({"event_id": event["event_id"], "status": "delivered", "response": response})
+                except Exception:
+                    self.integration_outbox.mark_attempt(event["event_id"], delivered=False)
+                    integration_delivery.append({"event_id": event["event_id"], "status": "failed"})
+
+        fleet_delivery = []
         if organization_id and message.get("classification") == "parts_invoice_candidate":
             for candidate in self.fleet_document_queue.list_pending(user_id):
                 if candidate["source_email_id"] != email_id or candidate["organization_id"] != organization_id:
@@ -96,28 +121,16 @@ class MainAgentRuntime:
                         mime_type=candidate.get("mime_type"),
                         size_bytes=candidate.get("size_bytes"),
                         document_type=candidate.get("document_type", "parts_invoice"),
-                        metadata={
-                            "sender": message.get("sender"),
-                            "subject": message.get("subject"),
-                            "classification": message.get("classification"),
-                            "source_account_id": message.get("account_id"),
-                        },
+                        metadata={"sender": message.get("sender"), "subject": message.get("subject"), "classification": message.get("classification"), "source_account_id": message.get("account_id")},
                     )
-                    delivery.append({"status": "forwarded_to_fleet", "candidate": persisted})
+                    fleet_delivery.append({"status": "forwarded_to_fleet", "candidate": persisted})
                 except Exception:
-                    self.integration_outbox.publish(
-                        user_id=user_id,
-                        event_type="fleet_document_delivery_failed",
-                        source="unified_mail",
-                        source_id=email_id,
-                        title=candidate["filename"],
-                        payload={"organization_id": organization_id, "candidate_id": candidate["candidate_id"]},
-                        destinations=("main_agent",),
-                        priority="high",
-                    )
-                    delivery.append({"status": "delivery_failed", "candidate_id": candidate["candidate_id"]})
-        if delivery:
-            message["fleet_document_delivery"] = delivery
+                    self.integration_outbox.publish(user_id=user_id, event_type="fleet_document_delivery_failed", source="unified_mail", source_id=email_id, title=candidate["filename"], payload={"organization_id": organization_id, "candidate_id": candidate["candidate_id"]}, destinations=("main_agent",), priority="high")
+                    fleet_delivery.append({"status": "delivery_failed", "candidate_id": candidate["candidate_id"]})
+        if integration_delivery:
+            message["integration_delivery"] = integration_delivery
+        if fleet_delivery:
+            message["fleet_document_delivery"] = fleet_delivery
         return message
 
     def register_mail_provider(self, backend):
