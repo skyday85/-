@@ -1,35 +1,43 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 from mail_contour.unified_mailbox import MailAccount, UnifiedMailbox
 
 
 class MailCollectorAgent:
-    """Specialized agent for all organization mailboxes in one operational view."""
+    """Specialized agent for user-scoped mailboxes in one operational view."""
 
     agent_id = "mail_collector_agent"
 
-    def __init__(self, mailbox: UnifiedMailbox | None = None) -> None:
+    def __init__(self, mailbox: UnifiedMailbox | None = None, integration_outbox=None, fleet_document_queue=None) -> None:
         self.mailbox = mailbox or UnifiedMailbox()
+        self.integration_outbox = integration_outbox
+        self.fleet_document_queue = fleet_document_queue
 
-    def add_account(self, *, account_id: str, address: str, provider: str,
-                    display_name: str | None = None) -> Dict[str, Any]:
-        return self.mailbox.register_account(MailAccount(
-            account_id=account_id,
-            address=address,
-            provider=provider,
-            display_name=display_name,
-        ))
+    def add_account(self, *, user_id: str, account_id: str, address: str, provider: str, display_name: str | None = None) -> Dict[str, Any]:
+        return self.mailbox.register_account(MailAccount(account_id=account_id, address=address, provider=provider, owner_user_id=user_id, display_name=display_name))
 
-    def ingest_messages(self, messages: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return self.mailbox.ingest(messages)
+    def ingest_messages(self, user_id: str, messages: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return self.mailbox.ingest(user_id, messages)
 
-    def inbox(self, *, unread_only: bool = False) -> List[Dict[str, Any]]:
-        return self.mailbox.unified_inbox(unread_only=unread_only)
+    def inbox(self, user_id: str, *, unread_only: bool = False, smart_folder: Optional[str] = None) -> List[Dict[str, Any]]:
+        return self.mailbox.unified_inbox(user_id, unread_only=unread_only, smart_folder=smart_folder)
 
-    def process_message(self, email_id: str) -> Dict[str, Any]:
-        return self.mailbox.classify_and_route(email_id)
+    def process_message(self, user_id: str, email_id: str) -> Dict[str, Any]:
+        message = self.mailbox.classify_and_route(user_id, email_id)
+        event_type = message.get("integration_event_type")
+        if event_type and self.integration_outbox is not None:
+            destinations = ("messenger",) if event_type == "transport_request_received" else ("main_agent",)
+            self.integration_outbox.publish(user_id=user_id, event_type=event_type, source="unified_mail", source_id=email_id, title=message.get("subject") or event_type, payload={"email_id": email_id, "sender": message.get("sender"), "subject": message.get("subject"), "smart_folder": message.get("smart_folder"), "classification": message.get("classification")}, destinations=destinations, priority=message.get("importance", "normal"))
 
-    def process_unread(self) -> List[Dict[str, Any]]:
-        return [self.process_message(x["email_id"]) for x in self.inbox(unread_only=True)]
+        if message.get("classification") == "parts_invoice_candidate" and self.fleet_document_queue is not None:
+            for attachment in message.get("attachments", []):
+                filename = str(attachment.get("filename", ""))
+                mime_type = str(attachment.get("mime_type", ""))
+                if filename.lower().endswith((".pdf", ".xml", ".xlsx", ".xls")) or mime_type in {"application/pdf", "application/xml", "text/xml"}:
+                    self.fleet_document_queue.add_invoice_candidate(user_id=user_id, source_email_id=email_id, attachment_id=str(attachment["attachment_id"]), filename=filename or "document")
+        return message
+
+    def process_unread(self, user_id: str) -> List[Dict[str, Any]]:
+        return [self.process_message(user_id, x["email_id"]) for x in self.inbox(user_id, unread_only=True)]
