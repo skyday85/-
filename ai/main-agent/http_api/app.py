@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 
 from app_shell.client_api import ClientContext
 from mail_contour.http_gateway import HttpOAuthMailGateway
-from mail_contour.provider_adapters import GmailProviderAdapter, OutlookProviderAdapter
 from runtime import build_runtime
 
 
@@ -49,7 +48,7 @@ class ConfirmClassificationRequest(BaseModel):
 
 
 class FleetDocumentAssignmentRequest(BaseModel):
-    vehicle_id: Optional[str] = None
+    vehicle_id: str = Field(min_length=1)
     purchase_id: Optional[str] = None
     repair_id: Optional[str] = None
 
@@ -118,12 +117,12 @@ def _oauth_state_secret() -> str:
 runtime = build_runtime()
 _configure_integrations(runtime)
 oauth_states = SignedOAuthState(_oauth_state_secret())
-app = FastAPI(title="Main Agent Unified API", version="0.3.0")
+app = FastAPI(title="Main Agent Unified API", version="0.4.0")
 
 allowed_origins = [x.strip() for x in os.getenv("APP_ALLOWED_ORIGINS", "").split(",") if x.strip()]
 if os.getenv("APP_ENV", "development") == "development":
     allowed_origins.extend(["http://localhost:1420", "http://127.0.0.1:1420"])
-app.add_middleware(CORSMiddleware, allow_origins=sorted(set(allowed_origins)), allow_credentials=True, allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Authenticated-User", "X-Device-Id", "X-App-Version"])
+app.add_middleware(CORSMiddleware, allow_origins=sorted(set(allowed_origins)), allow_credentials=True, allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Authenticated-User", "X-Organization-Id", "X-Device-Id", "X-App-Version"])
 
 
 def authenticated_user(request: Request) -> str:
@@ -134,6 +133,17 @@ def authenticated_user(request: Request) -> str:
     if env == "development" and (request.client.host if request.client else "") in {"127.0.0.1", "::1", "testclient"}:
         return "local-development-user"
     raise HTTPException(status_code=401, detail="Authenticated user required")
+
+
+def authenticated_organization(request: Request) -> str:
+    organization_id = request.headers.get("X-Organization-Id", "").strip()
+    if organization_id:
+        return organization_id
+    if os.getenv("APP_ENV", "development") == "development":
+        configured = os.getenv("APP_ORGANIZATION_ID", "").strip()
+        if configured:
+            return configured
+    raise HTTPException(status_code=401, detail="Organization context required")
 
 
 def public_api_base(request: Request) -> str:
@@ -199,9 +209,9 @@ def mail_message(email_id: str, user_id: str = Depends(authenticated_user)):
 
 
 @app.post("/mail/messages/{email_id}/process")
-def process_mail(email_id: str, user_id: str = Depends(authenticated_user)):
+def process_mail(email_id: str, user_id: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
     try:
-        return runtime.client_api.process_mail_message(user_id, email_id)
+        return runtime.client_api.process_mail_message(user_id, email_id, organization_id=organization_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Mail message not found") from exc
 
@@ -217,24 +227,22 @@ def mail_integration_events(user_id: str = Depends(authenticated_user)):
 
 
 @app.get("/fleet/document-candidates")
-def fleet_document_candidates(user_id: str = Depends(authenticated_user)):
-    return runtime.client_api.get_fleet_document_candidates(user_id)
+def fleet_document_candidates(_user: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
+    return runtime.client_api.get_fleet_document_candidates(organization_id)
 
 
 @app.post("/fleet/document-candidates/{candidate_id}/assign")
-def assign_fleet_document(candidate_id: str, payload: FleetDocumentAssignmentRequest, user_id: str = Depends(authenticated_user)):
+def assign_fleet_document(candidate_id: str, payload: FleetDocumentAssignmentRequest, _user: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
     try:
-        result = runtime.fleet_document_queue.assign(user_id, candidate_id, vehicle_id=payload.vehicle_id, purchase_id=payload.purchase_id, repair_id=payload.repair_id)
-        runtime.integration_outbox.publish(user_id=user_id, event_type="fleet_document_ready", source="mail_document_queue", source_id=candidate_id, title=result["filename"], payload=result, destinations=("fleet",), priority="high")
-        return result
+        return runtime.assign_fleet_document_candidate(organization_id=organization_id, candidate_id=candidate_id, vehicle_id=payload.vehicle_id, purchase_request_id=payload.purchase_id, repair_id=payload.repair_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Document candidate not found") from exc
 
 
 @app.post("/fleet/document-candidates/{candidate_id}/dismiss")
-def dismiss_fleet_document(candidate_id: str, user_id: str = Depends(authenticated_user)):
+def dismiss_fleet_document(candidate_id: str, _user: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
     try:
-        return runtime.fleet_document_queue.dismiss(user_id, candidate_id)
+        return runtime.dismiss_fleet_document_candidate(organization_id=organization_id, candidate_id=candidate_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Document candidate not found") from exc
 
