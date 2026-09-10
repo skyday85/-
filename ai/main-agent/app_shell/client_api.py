@@ -44,9 +44,8 @@ class UnifiedClientApi:
     def process_mail_message(self, user_id: str, email_id: str, *, organization_id: str | None = None) -> Dict[str, Any]:
         return self.runtime.process_mail(user_id, email_id, organization_id=organization_id)
 
-    def refresh_mail(self, user_id: str) -> Dict[str, Any]:
-        self.runtime.refresh_mail_accounts(user_id)
-        return self.runtime.mail_sync.sync_all(user_id)
+    def refresh_mail(self, user_id: str, *, organization_id: str | None = None) -> Dict[str, Any]:
+        return self.runtime.sync_mail(user_id, organization_id=organization_id)
 
     def begin_mail_authorization(self, *, user_id: str, provider: str, redirect_uri: str, state: str) -> str:
         return self.runtime.begin_mail_authorization(user_id=user_id, provider=provider, redirect_uri=redirect_uri, state=state)
