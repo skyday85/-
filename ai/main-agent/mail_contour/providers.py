@@ -9,6 +9,7 @@ class MailProviderAccount:
     account_id: str
     address: str
     provider: str
+    owner_user_id: str
     display_name: Optional[str] = None
     auth_mode: str = "oauth"
 
@@ -17,42 +18,21 @@ class MailProviderAccount:
 class MailProviderConnectionState:
     provider: str
     account_id: str
+    owner_user_id: str
     connected: bool
     scopes: tuple[str, ...] = ()
     reauth_required: bool = False
 
 
 class MailProviderBackend(Protocol):
-    """Provider adapter contract for Gmail, Outlook and future providers.
-
-    OAuth refresh tokens, client secrets and provider credentials stay inside
-    the secure integration layer and are never exposed to agents or clients.
-    """
-
     provider: str
 
-    def list_accounts(self) -> Iterable[MailProviderAccount]: ...
-
-    def connection_state(self, account_id: str) -> MailProviderConnectionState: ...
-
-    def build_authorization_url(self, *, redirect_uri: str, state: str) -> str: ...
-
-    def complete_authorization(self, *, code: str, redirect_uri: str, state: str) -> MailProviderAccount: ...
-
-    def fetch_messages(
-        self,
-        account_id: str,
-        *,
-        cursor: Optional[str] = None,
-        limit: int = 100,
-    ) -> Dict: ...
-
-    def fetch_attachment(
-        self,
-        account_id: str,
-        provider_message_id: str,
-        attachment_id: str,
-    ) -> Dict: ...
+    def list_accounts(self, user_id: str) -> Iterable[MailProviderAccount]: ...
+    def connection_state(self, user_id: str, account_id: str) -> MailProviderConnectionState: ...
+    def build_authorization_url(self, *, user_id: str, redirect_uri: str, state: str) -> str: ...
+    def complete_authorization(self, *, user_id: str, code: str, redirect_uri: str, state: str) -> MailProviderAccount: ...
+    def fetch_messages(self, user_id: str, account_id: str, *, cursor: Optional[str] = None, limit: int = 100) -> Dict: ...
+    def fetch_attachment(self, user_id: str, account_id: str, provider_message_id: str, attachment_id: str) -> Dict: ...
 
 
 class MailProviderRegistry:
@@ -73,15 +53,15 @@ class MailProviderRegistry:
     def list_providers(self) -> List[str]:
         return sorted(self._providers)
 
-    def list_accounts(self) -> List[MailProviderAccount]:
+    def list_accounts(self, user_id: str) -> List[MailProviderAccount]:
         accounts: List[MailProviderAccount] = []
         for backend in self._providers.values():
-            accounts.extend(backend.list_accounts())
+            accounts.extend(backend.list_accounts(user_id))
         return accounts
 
-    def connection_states(self) -> List[MailProviderConnectionState]:
+    def connection_states(self, user_id: str) -> List[MailProviderConnectionState]:
         states: List[MailProviderConnectionState] = []
         for backend in self._providers.values():
-            for account in backend.list_accounts():
-                states.append(backend.connection_state(account.account_id))
+            for account in backend.list_accounts(user_id):
+                states.append(backend.connection_state(user_id, account.account_id))
         return states
