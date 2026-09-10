@@ -23,12 +23,15 @@ export type BootstrapResponse = {
     accounts: Array<Record<string, unknown>>;
     connections: Array<Record<string, unknown>>;
     unread_count: number;
+    important_count: number;
+    folders: Record<string, number>;
   };
   agents: Array<Record<string, unknown>>;
 };
 
 export type MailMessage = {
   email_id: string;
+  user_id: string;
   account_id: string;
   sender: string;
   subject: string;
@@ -36,6 +39,19 @@ export type MailMessage = {
   unread: boolean;
   classification?: string | null;
   route_to?: string | null;
+  smart_folder: 'important_requests' | 'finance' | 'procurement' | 'documents' | 'marketing' | 'other';
+  importance: 'normal' | 'high';
+  attention_reason?: string | null;
+};
+
+export type FleetDocumentCandidate = {
+  candidate_id: string;
+  source_email_id: string;
+  attachment_id: string;
+  filename: string;
+  document_type: string;
+  status: string;
+  suggested_vehicle_id?: string | null;
 };
 
 export type BankClassification = {
@@ -82,6 +98,11 @@ export function getUnifiedInbox(params: URLSearchParams = new URLSearchParams())
   return request<MailMessage[]>(`/mail/inbox?${params.toString()}`);
 }
 
+export function getMailFolder(folder: string) {
+  const params = new URLSearchParams({ smart_folder: folder });
+  return getUnifiedInbox(params);
+}
+
 export function beginMailAuthorization(provider: 'gmail' | 'outlook') {
   return request<{ authorization_url: string }>(`/mail/accounts/${provider}/authorize`, {
     method: 'POST',
@@ -97,6 +118,23 @@ export function processMailMessage(emailId: string) {
   return request<Record<string, unknown>>(`/mail/messages/${encodeURIComponent(emailId)}/process`, { method: 'POST' });
 }
 
+export function getFleetDocumentCandidates() {
+  return request<FleetDocumentCandidate[]>('/fleet/document-candidates');
+}
+
+export function assignFleetDocument(candidateId: string, vehicleId: string) {
+  return request<FleetDocumentCandidate>(`/fleet/document-candidates/${encodeURIComponent(candidateId)}/assign`, {
+    method: 'POST',
+    body: JSON.stringify({ vehicle_id: vehicleId }),
+  });
+}
+
+export function dismissFleetDocument(candidateId: string) {
+  return request<FleetDocumentCandidate>(`/fleet/document-candidates/${encodeURIComponent(candidateId)}/dismiss`, {
+    method: 'POST',
+  });
+}
+
 export function sendAgentCommand(text: string) {
   return request<Record<string, unknown>>('/agent/commands', {
     method: 'POST',
@@ -109,17 +147,9 @@ export function getFinanceReviewQueue() {
 }
 
 export function classifyBankTransaction(transactionId: string) {
-  return request<BankClassification>(`/finance/transactions/${encodeURIComponent(transactionId)}/classify`, {
-    method: 'POST',
-  });
+  return request<BankClassification>(`/finance/transactions/${encodeURIComponent(transactionId)}/classify`, { method: 'POST' });
 }
 
-export function confirmBankClassification(
-  transactionId: string,
-  changes: Partial<Pick<BankClassification, 'operation_type' | 'category' | 'rationale'>> = {},
-) {
-  return request<BankClassification>(`/finance/transactions/${encodeURIComponent(transactionId)}/confirm`, {
-    method: 'POST',
-    body: JSON.stringify(changes),
-  });
+export function confirmBankClassification(transactionId: string, changes: Partial<Pick<BankClassification, 'operation_type' | 'category' | 'rationale'>> = {}) {
+  return request<BankClassification>(`/finance/transactions/${encodeURIComponent(transactionId)}/confirm`, { method: 'POST', body: JSON.stringify(changes) });
 }
