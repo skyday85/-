@@ -5,6 +5,9 @@ import {
   classifyBankTransaction,
   confirmBankClassification,
   getFinanceReviewQueue,
+  getFleetDocumentCandidates,
+  assignFleetDocument,
+  dismissFleetDocument,
   getMailFolder,
   getUnifiedInbox,
   processMailMessage,
@@ -35,6 +38,8 @@ export default function App() {
   const [mail, setMail] = useState<MailMessage[]>([]);
   const [mailFolder, setMailFolder] = useState<string>('all');
   const [financeReview, setFinanceReview] = useState<BankTransaction[]>([]);
+  const [documents, setDocuments] = useState<FleetDocumentCandidate[]>([]);
+  const [vehicles, setVehicles] = useState<Array<{ id: string; stateNumber?: string; brand?: string; model?: string }>>([]);
   const [active, setActive] = useState('main_agent');
   const [error, setError] = useState<string | null>(null);
   const [command, setCommand] = useState('');
@@ -55,8 +60,38 @@ export default function App() {
     setFinanceReview(await getFinanceReviewQueue());
   }
 
+  async function reloadDocuments() {
+    const items = await getFleetDocumentCandidates();
+    setDocuments(items);
+  }
+
+  async function assignDocument(item: FleetDocumentCandidate, vehicleId: string) {
+    if (!vehicleId) return;
+    try {
+      setBusy(true);
+      await assignFleetDocument(item.candidate_id, vehicleId);
+      await reloadDocuments();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось привязать документ');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function dismissDocument(candidateId: string) {
+    try {
+      setBusy(true);
+      await dismissFleetDocument(candidateId);
+      await reloadDocuments();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось отклонить документ');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
-    Promise.all([reloadCore(), reloadFinance()]).catch((e) => setError(e instanceof Error ? e.message : 'Ошибка загрузки'));
+    Promise.all([reloadCore(), reloadFinance(), reloadDocuments()]).catch((e) => setError(e instanceof Error ? e.message : 'Ошибка загрузки'));
   }, [platform]);
 
   async function selectMailFolder(folder: string) {
@@ -203,6 +238,27 @@ export default function App() {
                   <div className="mail-source">{item.importance === 'high' ? 'ВАЖНО' : item.account_id}</div>
                   <div className="mail-content"><strong>{item.sender}</strong><span>{item.subject || '(без темы)'}</span><small>{item.attention_reason || item.classification || 'нажмите для классификации'}</small></div>
                   <time>{new Date(item.received_at).toLocaleString('ru-RU')}</time>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {active === 'procurement' && (
+          <section className="mail-layout">
+            <div className="mail-toolbar"><div><h2>Документы от поставщиков</h2><p>Вложения из почты ждут подтверждения перед попаданием в историю автомобиля.</p></div><button disabled={busy} onClick={reloadDocuments}>Обновить</button></div>
+            <div className="mail-list">
+              {documents.length === 0 ? <div className="empty-state">Новых документов нет.</div> : documents.map((item) => (
+                <article key={item.candidate_id} className="mail-row">
+                  <div className="mail-source">ДОКУМЕНТ</div>
+                  <div className="mail-content"><strong>{item.filename}</strong><span>{item.document_type}</span><small>Письмо: {item.source_email_id}</small></div>
+                  <div className="connect-actions">
+                    <select disabled={busy} defaultValue="" onChange={(e) => void assignDocument(item, e.target.value)}>
+                      <option value="">Выбрать автомобиль</option>
+                      {vehicles.map((v) => <option key={v.id} value={v.id}>{v.stateNumber || v.id} · {[v.brand, v.model].filter(Boolean).join(' ')}</option>)}
+                    </select>
+                    <button disabled={busy} onClick={() => void dismissDocument(item.candidate_id)}>Отклонить</button>
+                  </div>
                 </article>
               ))}
             </div>
