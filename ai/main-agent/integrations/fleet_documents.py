@@ -48,7 +48,7 @@ class FleetDocumentQueue:
         self._items[item.candidate_id] = item
         self._source_index[source_key] = item.candidate_id
         if self.persistence:
-            self.persistence.put("fleet_document_candidates", {"candidate_id": item.candidate_id, "organization_id": item.organization_id}, asdict(item))
+            self.persistence.put("fleet_document_candidates", {"candidate_id": item.candidate_id}, asdict(item))
         return asdict(item)
 
     def list_pending(self, user_id: str) -> List[Dict[str, Any]]:
