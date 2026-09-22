@@ -13,6 +13,7 @@ from integrations.events import IntegrationOutbox
 from integrations.fleet_documents import FleetDocumentQueue
 from integrations.http_dispatcher import HttpIntegrationDispatcher
 from mail_contour.mail_collector_agent import MailCollectorAgent
+from mail_contour.persistence import MailPersistence
 from mail_contour.provider_adapters import GmailProviderAdapter, OutlookProviderAdapter
 from mail_contour.providers import MailProviderRegistry
 from mail_contour.sync_service import UnifiedMailSyncService
@@ -30,12 +31,14 @@ class MainAgentRuntime:
         self.expense_bridge = ExpenseBridge()
         self.agent_registry = AgentRegistry()
         self.delegation = DelegationEngine(self.agent_registry)
-        self.integration_outbox = IntegrationOutbox()
+        db_path = os.getenv("MAIL_DATABASE_PATH", "./data/mail_contour.sqlite3")
+        self.mail_persistence = MailPersistence(db_path)
+        self.integration_outbox = IntegrationOutbox(self.mail_persistence)
         self.integration_dispatcher = self._build_integration_dispatcher()
-        self.fleet_document_queue = FleetDocumentQueue()
-        self.mail_collector = MailCollectorAgent(integration_outbox=self.integration_outbox, fleet_document_queue=self.fleet_document_queue)
+        self.fleet_document_queue = FleetDocumentQueue(self.mail_persistence)
+        self.mail_collector = MailCollectorAgent(mailbox=__import__("mail_contour.unified_mailbox", fromlist=["UnifiedMailbox"]).UnifiedMailbox(self.mail_persistence), integration_outbox=self.integration_outbox, fleet_document_queue=self.fleet_document_queue)
         self.mail_providers = MailProviderRegistry()
-        self.mail_sync = UnifiedMailSyncService(self.mail_collector.mailbox, self.mail_providers)
+        self.mail_sync = UnifiedMailSyncService(self.mail_collector.mailbox, self.mail_providers, self.mail_persistence)
         self.app_shell = AppShellRegistry()
         self.client_api = UnifiedClientApi(self)
         self.mail_accounts_view = MailAccountsViewModel(self)
