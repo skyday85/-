@@ -118,6 +118,10 @@ export function processMailMessage(emailId: string) {
   return request<Record<string, unknown>>(`/mail/messages/${encodeURIComponent(emailId)}/process`, { method: 'POST' });
 }
 
+export function getFleetVehicles() {
+  return request<{ items: Array<{ id: string; stateNumber?: string; brand?: string; model?: string }> }>('/fleet/vehicles').then((r) => r.items);
+}
+
 export function getFleetDocumentCandidates() {
   return request<{ items: FleetDocumentCandidate[] }>('/fleet/document-candidates').then((r) => r.items);
 }
