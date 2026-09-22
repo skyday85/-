@@ -1,5 +1,6 @@
 import json
 import os
+import uuid
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -88,20 +89,54 @@ class HttpFleetBackend:
         size_bytes: Optional[int] = None,
         document_type: str = "parts_invoice",
         metadata: Optional[Dict[str, Any]] = None,
+        content_bytes: bytes,
     ) -> Dict[str, Any]:
-        result = self._request("POST", payload={
+        if not content_bytes:
+            raise ValueError("content_bytes is required for fleet document transfer")
+        if len(content_bytes) > 25 * 1024 * 1024:
+            raise ValueError("attachment exceeds 25 MB fleet transfer limit")
+
+        boundary = f"----MainAgent{uuid.uuid4().hex}"
+        fields = {
             "action": "create_document_candidate",
             "organizationId": organization_id,
             "sourceUserId": source_user_id,
             "sourceEmailId": source_email_id,
             "sourceAttachmentId": source_attachment_id,
             "originalName": original_name,
-            "mimeType": mime_type,
-            "sizeBytes": size_bytes,
+            "mimeType": mime_type or "application/octet-stream",
             "documentType": document_type,
-            "metadata": metadata or {},
-        })
-        return result["candidate"]
+            "metadata": json.dumps(metadata or {}, ensure_ascii=False),
+        }
+        chunks: List[bytes] = []
+        for name, value in fields.items():
+            chunks.extend([
+                f"--{boundary}\r\n".encode(),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+                str(value).encode("utf-8"),
+                b"\r\n",
+            ])
+        safe_name = original_name.replace("\\", "_").replace('"', "_").replace("\r", "_").replace("\n", "_")
+        chunks.extend([
+            f"--{boundary}\r\n".encode(),
+            f'Content-Disposition: form-data; name="file"; filename="{safe_name}"\r\n'.encode(),
+            f"Content-Type: {(mime_type or 'application/octet-stream')}\r\n\r\n".encode(),
+            content_bytes,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode(),
+        ])
+        request = Request(
+            f"{self.base_url}/api/agent/fleet",
+            data=b"".join(chunks),
+            headers={
+                "x-main-agent-key": self.api_key,
+                "accept": "application/json",
+                "content-type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))["candidate"]
 
     def list_document_candidates(self, organization_id: str) -> List[Dict[str, Any]]:
         return list(self._get(view="document_candidates", organization_id=organization_id).get("items", []))
