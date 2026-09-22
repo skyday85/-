@@ -71,7 +71,9 @@ class UnifiedMailbox:
                 attachments = [MailAttachment(**x) for x in data.pop("attachments", [])]
                 message = UnifiedMailMessage(attachments=attachments, **data)
                 self.messages[(message.user_id, message.email_id)] = message
-                self._provider_keys[(message.user_id, message.provider, message.account_id, message.provider_message_id)] = message.email_id
+                account = self.accounts.get((message.user_id, message.account_id))
+                if account:
+                    self._provider_keys[(message.user_id, account.provider, message.account_id, message.provider_message_id)] = message.email_id
 
     def register_account(self, account: MailAccount) -> Dict[str, Any]:
         self.accounts[(account.owner_user_id, account.account_id)] = account
