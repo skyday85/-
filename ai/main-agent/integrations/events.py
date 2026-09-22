@@ -48,7 +48,7 @@ class IntegrationOutbox:
         self._events.append(event)
         self._dedupe[key] = event.event_id
         if self.persistence:
-            self.persistence.put("integration_events", {"event_id": event.event_id, "user_id": event.user_id}, asdict(event))
+            self.persistence.put("integration_events", {"event_id": event.event_id}, asdict(event))
         return asdict(event)
 
     def get(self, event_id: str) -> Dict[str, Any]:
