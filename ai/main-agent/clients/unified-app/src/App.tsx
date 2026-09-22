@@ -6,6 +6,7 @@ import {
   confirmBankClassification,
   getFinanceReviewQueue,
   getFleetDocumentCandidates,
+  getFleetVehicles,
   assignFleetDocument,
   dismissFleetDocument,
   getMailFolder,
@@ -62,8 +63,9 @@ export default function App() {
   }
 
   async function reloadDocuments() {
-    const items = await getFleetDocumentCandidates();
+    const [items, fleetVehicles] = await Promise.all([getFleetDocumentCandidates(), getFleetVehicles()]);
     setDocuments(items);
+    setVehicles(fleetVehicles);
   }
 
   async function assignDocument(item: FleetDocumentCandidate, vehicleId: string) {
