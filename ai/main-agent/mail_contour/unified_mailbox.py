@@ -69,6 +69,8 @@ class UnifiedMailbox:
                 self.accounts[(account.owner_user_id, account.account_id)] = account
             for data in persistence.all("mail_messages"):
                 attachments = [MailAttachment(**x) for x in data.pop("attachments", [])]
+                data.pop("source_system", None)
+                data.pop("source_record_id", None)
                 message = UnifiedMailMessage(attachments=attachments, **data)
                 self.messages[(message.user_id, message.email_id)] = message
                 account = self.accounts.get((message.user_id, message.account_id))
