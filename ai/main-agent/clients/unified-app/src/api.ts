@@ -119,7 +119,7 @@ export function processMailMessage(emailId: string) {
 }
 
 export function getFleetDocumentCandidates() {
-  return request<FleetDocumentCandidate[]>('/fleet/document-candidates');
+  return request<{ items: FleetDocumentCandidate[] }>('/fleet/document-candidates').then((r) => r.items);
 }
 
 export function assignFleetDocument(candidateId: string, vehicleId: string) {
