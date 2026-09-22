@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from mail_contour.persistence import MailPersistence
+
 
 @dataclass
 class MailAccount:
@@ -56,13 +58,25 @@ class UnifiedMailMessage:
 class UnifiedMailbox:
     """Provider-neutral multi-user mailbox with virtual business folders."""
 
-    def __init__(self) -> None:
+    def __init__(self, persistence: MailPersistence | None = None) -> None:
+        self.persistence = persistence
         self.accounts: Dict[Tuple[str, str], MailAccount] = {}
         self.messages: Dict[Tuple[str, str], UnifiedMailMessage] = {}
         self._provider_keys: Dict[Tuple[str, str, str, str], str] = {}
+        if persistence:
+            for data in persistence.all("mail_accounts"):
+                account = MailAccount(**data)
+                self.accounts[(account.owner_user_id, account.account_id)] = account
+            for data in persistence.all("mail_messages"):
+                attachments = [MailAttachment(**x) for x in data.pop("attachments", [])]
+                message = UnifiedMailMessage(attachments=attachments, **data)
+                self.messages[(message.user_id, message.email_id)] = message
+                self._provider_keys[(message.user_id, message.provider, message.account_id, message.provider_message_id)] = message.email_id
 
     def register_account(self, account: MailAccount) -> Dict[str, Any]:
         self.accounts[(account.owner_user_id, account.account_id)] = account
+        if self.persistence:
+            self.persistence.put("mail_accounts", {"user_id": account.owner_user_id, "account_id": account.account_id}, asdict(account))
         return asdict(account)
 
     def ingest(self, user_id: str, rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -85,6 +99,8 @@ class UnifiedMailbox:
             message = UnifiedMailMessage(email_id=email_id, user_id=user_id, account_id=account_id, provider_message_id=provider_message_id, thread_id=row.get("thread_id"), sender=str(row.get("sender", "")), recipients=[str(x) for x in row.get("recipients", [])], subject=str(row.get("subject", "")), received_at=str(row["received_at"]), body_text=str(row.get("body_text", "")), body_html=row.get("body_html"), attachments=attachments, labels=[str(x) for x in row.get("labels", [])], unread=bool(row.get("unread", True)), direction=str(row.get("direction", "incoming")))
             self.messages[message_key] = message
             self._provider_keys[provider_key] = email_id
+            if self.persistence:
+                self.persistence.put("mail_messages", {"user_id": user_id, "email_id": email_id}, self._serialize(message))
             imported.append(self._serialize(message))
         return imported
 
@@ -141,7 +157,10 @@ class UnifiedMailbox:
         else:
             message.classification, message.route_to, message.review_status = "general_operational", "mail_collector>main_agent", "needs_review"
             message.smart_folder = "other"
-        return self._serialize(message)
+        serialized = self._serialize(message)
+        if self.persistence:
+            self.persistence.put("mail_messages", {"user_id": user_id, "email_id": email_id}, serialized)
+        return serialized
 
     def get_message(self, user_id: str, email_id: str) -> Dict[str, Any]:
         return self._serialize(self.messages[(user_id, email_id)])
