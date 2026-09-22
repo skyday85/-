@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from mail_contour.persistence import MailPersistence
 from mail_contour.providers import MailProviderRegistry
 from mail_contour.unified_mailbox import MailAccount, UnifiedMailbox
 
@@ -21,16 +22,23 @@ class MailSyncState:
 class UnifiedMailSyncService:
     """Provider synchronization only; business processing happens in runtime."""
 
-    def __init__(self, mailbox: UnifiedMailbox, providers: MailProviderRegistry) -> None:
+    def __init__(self, mailbox: UnifiedMailbox, providers: MailProviderRegistry, persistence: MailPersistence | None = None) -> None:
         self.mailbox = mailbox
         self.providers = providers
+        self.persistence = persistence
         self._sync_state: Dict[Tuple[str, str], MailSyncState] = {}
+        if persistence:
+            for data in persistence.all("mail_sync_state"):
+                state = MailSyncState(**data)
+                self._sync_state[(state.user_id, state.account_id)] = state
 
     def refresh_accounts(self, user_id: str) -> List[Dict[str, Any]]:
         registered: List[Dict[str, Any]] = []
         for account in self.providers.list_accounts(user_id):
             result = self.mailbox.register_account(MailAccount(account_id=account.account_id, address=account.address, provider=account.provider, owner_user_id=user_id, display_name=account.display_name))
             self._sync_state.setdefault((user_id, account.account_id), MailSyncState(user_id=user_id, account_id=account.account_id, provider=account.provider))
+            if self.persistence:
+                self.persistence.put("mail_sync_state", {"user_id": user_id, "account_id": account.account_id}, asdict(self._sync_state[(user_id, account.account_id)]))
             registered.append(result)
         return registered
 
@@ -45,6 +53,8 @@ class UnifiedMailSyncService:
             state.cursor = page.get("next_cursor") or state.cursor
             state.last_sync_at = datetime.now(timezone.utc).isoformat()
             state.last_error = None
+            if self.persistence:
+                self.persistence.put("mail_sync_state", {"user_id": user_id, "account_id": account_id}, asdict(state))
             return {
                 "account_id": account_id,
                 "provider": account.provider,
@@ -56,6 +66,8 @@ class UnifiedMailSyncService:
         except Exception:
             state.last_sync_at = datetime.now(timezone.utc).isoformat()
             state.last_error = "Mail synchronization failed"
+            if self.persistence:
+                self.persistence.put("mail_sync_state", {"user_id": user_id, "account_id": account_id}, asdict(state))
             raise
 
     def sync_all(self, user_id: str, *, limit_per_account: int = 100) -> Dict[str, Any]:
