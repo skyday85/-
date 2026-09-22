@@ -1,3 +1,4 @@
+import base64
 import os
 
 from agents.delegation import DelegationEngine
@@ -116,16 +117,18 @@ class MainAgentRuntime:
                 if candidate["source_email_id"] != email_id or candidate["organization_id"] != organization_id:
                     continue
                 try:
+                    attachment = self.fetch_mail_attachment(user_id, email_id, candidate["attachment_id"])
                     persisted = self.fleet_backend.create_document_candidate(
                         organization_id=organization_id,
                         source_user_id=user_id,
                         source_email_id=email_id,
                         source_attachment_id=candidate["attachment_id"],
-                        original_name=candidate["filename"],
-                        mime_type=candidate.get("mime_type"),
-                        size_bytes=candidate.get("size_bytes"),
+                        original_name=str(attachment.get("filename") or candidate["filename"]),
+                        mime_type=attachment.get("mime_type") or candidate.get("mime_type"),
+                        size_bytes=attachment.get("size_bytes") or candidate.get("size_bytes"),
                         document_type=candidate.get("document_type", "parts_invoice"),
                         metadata={"sender": message.get("sender"), "subject": message.get("subject"), "classification": message.get("classification"), "source_account_id": message.get("account_id")},
+                        content_bytes=attachment["content_bytes"],
                     )
                     fleet_delivery.append({"status": "forwarded_to_fleet", "candidate": persisted})
                 except Exception:
@@ -136,6 +139,25 @@ class MainAgentRuntime:
         if fleet_delivery:
             message["fleet_document_delivery"] = fleet_delivery
         return message
+
+    def fetch_mail_attachment(self, user_id: str, email_id: str, attachment_id: str):
+        message = self.mail_collector.mailbox.get_message(user_id, email_id)
+        account_id = str(message["account_id"])
+        provider = self.mail_collector.mailbox.accounts[(user_id, account_id)].provider
+        attachment = self.mail_providers.get(provider).fetch_attachment(
+            user_id,
+            account_id,
+            str(message["provider_message_id"]),
+            attachment_id,
+        )
+        encoded = attachment.get("content_base64") or attachment.get("content_base64url") or ""
+        if not encoded:
+            raise ValueError("mail gateway returned empty attachment")
+        try:
+            content = base64.b64decode(encoded, validate=False)
+        except Exception:
+            content = base64.urlsafe_b64decode(str(encoded) + "=" * (-len(str(encoded)) % 4))
+        return {**attachment, "content_bytes": content, "size_bytes": attachment.get("size_bytes") or len(content)}
 
     def sync_mail(self, user_id: str, *, organization_id: str | None = None):
         """Sync provider mail and immediately classify/route every newly imported message."""
