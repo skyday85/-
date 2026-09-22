@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from mail_contour.persistence import MailPersistence
+
 
 @dataclass
 class FleetDocumentCandidate:
@@ -27,9 +29,15 @@ class FleetDocumentCandidate:
 class FleetDocumentQueue:
     """User-originated, organization-scoped staging before fleet import."""
 
-    def __init__(self) -> None:
+    def __init__(self, persistence: MailPersistence | None = None) -> None:
+        self.persistence = persistence
         self._items: Dict[str, FleetDocumentCandidate] = {}
         self._source_index: Dict[Tuple[str, str, str, str], str] = {}
+        if persistence:
+            for data in persistence.all("fleet_document_candidates"):
+                item = FleetDocumentCandidate(**data)
+                self._items[item.candidate_id] = item
+                self._source_index[(item.organization_id, item.user_id, item.source_email_id, item.attachment_id)] = item.candidate_id
 
     def add_invoice_candidate(self, *, organization_id: str, user_id: str, source_email_id: str, attachment_id: str, filename: str, mime_type: Optional[str] = None, size_bytes: Optional[int] = None, suggested_vehicle_id: Optional[str] = None) -> Dict[str, Any]:
         source_key = (organization_id, user_id, source_email_id, attachment_id)
@@ -39,6 +47,8 @@ class FleetDocumentQueue:
         item = FleetDocumentCandidate(candidate_id=str(uuid4()), organization_id=organization_id, user_id=user_id, source_email_id=source_email_id, attachment_id=attachment_id, filename=filename, document_type="parts_invoice", mime_type=mime_type, size_bytes=size_bytes, suggested_vehicle_id=suggested_vehicle_id)
         self._items[item.candidate_id] = item
         self._source_index[source_key] = item.candidate_id
+        if self.persistence:
+            self.persistence.put("fleet_document_candidates", {"candidate_id": item.candidate_id, "organization_id": item.organization_id}, asdict(item))
         return asdict(item)
 
     def list_pending(self, user_id: str) -> List[Dict[str, Any]]:
@@ -52,6 +62,8 @@ class FleetDocumentQueue:
         item.suggested_purchase_id = purchase_id
         item.suggested_repair_id = repair_id
         item.status = "ready_for_fleet_upload"
+        if self.persistence:
+            self.persistence.put("fleet_document_candidates", {"candidate_id": item.candidate_id, "organization_id": item.organization_id}, asdict(item))
         return asdict(item)
 
     def dismiss(self, user_id: str, candidate_id: str) -> Dict[str, Any]:
@@ -59,4 +71,6 @@ class FleetDocumentQueue:
         if item.user_id != user_id:
             raise KeyError(candidate_id)
         item.status = "dismissed"
+        if self.persistence:
+            self.persistence.put("fleet_document_candidates", {"candidate_id": item.candidate_id, "organization_id": item.organization_id}, asdict(item))
         return asdict(item)
