@@ -16,6 +16,7 @@ import {
   type BankTransaction,
   type BootstrapResponse,
   type MailMessage,
+  type FleetDocumentCandidate,
 } from './api';
 
 const MAIL_FOLDERS = [
