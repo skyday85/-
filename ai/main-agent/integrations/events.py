@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from uuid import uuid4
 
+from mail_contour.persistence import MailPersistence
+
 
 @dataclass
 class IntegrationEvent:
@@ -26,9 +28,15 @@ class IntegrationEvent:
 class IntegrationOutbox:
     """Idempotent provider-neutral outbox for external application events."""
 
-    def __init__(self) -> None:
+    def __init__(self, persistence: MailPersistence | None = None) -> None:
+        self.persistence = persistence
         self._events: List[IntegrationEvent] = []
         self._dedupe: Dict[Tuple[str, str, str, str, tuple[str, ...]], str] = {}
+        if persistence:
+            for data in persistence.all("integration_events"):
+                event = IntegrationEvent(**data)
+                self._events.append(event)
+                self._dedupe[(event.user_id, event.event_type, event.source, event.source_id, tuple(event.destinations))] = event.event_id
 
     def publish(self, *, user_id: str, event_type: str, source: str, source_id: str, title: str, payload: Dict[str, Any], destinations: Iterable[str] = (), priority: str = "normal") -> Dict[str, Any]:
         destination_tuple = tuple(destinations)
@@ -39,6 +47,8 @@ class IntegrationOutbox:
         event = IntegrationEvent(event_id=str(uuid4()), user_id=user_id, event_type=event_type, source=source, source_id=source_id, title=title, payload=payload, destinations=destination_tuple, priority=priority)
         self._events.append(event)
         self._dedupe[key] = event.event_id
+        if self.persistence:
+            self.persistence.put("integration_events", {"event_id": event.event_id, "user_id": event.user_id}, asdict(event))
         return asdict(event)
 
     def get(self, event_id: str) -> Dict[str, Any]:
@@ -54,6 +64,8 @@ class IntegrationOutbox:
             event.delivery_attempts += 1
             event.delivery_status = "delivered" if delivered else "failed"
             event.delivered_at = datetime.now(timezone.utc).isoformat() if delivered else None
+            if self.persistence:
+                self.persistence.put("integration_events", {"event_id": event.event_id, "user_id": event.user_id}, asdict(event))
             return asdict(event)
         raise KeyError(event_id)
 
