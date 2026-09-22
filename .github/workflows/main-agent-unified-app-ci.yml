@@ -40,6 +40,8 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q .
       - name: Run tests
+        env:
+          PYTHONPATH: .
         run: pytest -q
 
   frontend-build:
@@ -80,5 +82,10 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
       - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare frontend assets for Tauri metadata validation
+        working-directory: ai/main-agent/clients/unified-app
+        run: |
+          npm install
+          npm run build
       - name: Check Rust shell
         run: cargo check
