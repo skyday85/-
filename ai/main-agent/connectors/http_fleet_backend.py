@@ -44,11 +44,11 @@ class HttpFleetBackend:
              organization_id: Optional[str] = None) -> Dict[str, Any]:
         return self._request("GET", vehicle_id=vehicle_id, view=view, organization_id=organization_id)
 
-    def list_vehicles(self) -> List[Dict[str, Any]]:
-        return [self._vehicle_shape(row) for row in self._get().get("vehicles", [])]
+    def list_vehicles(self, organization_id: str) -> List[Dict[str, Any]]:
+        return [self._vehicle_shape(row) for row in self._get(organization_id=organization_id).get("vehicles", [])]
 
-    def get_vehicle(self, vehicle_id: str) -> Optional[Dict[str, Any]]:
-        row = self._get(vehicle_id).get("vehicle")
+    def get_vehicle(self, vehicle_id: str, organization_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        row = self._get(vehicle_id, organization_id=organization_id).get("vehicle")
         return self._vehicle_shape(row) if row else None
 
     def get_vehicle_history(self, vehicle_id: str) -> List[Dict[str, Any]]:
