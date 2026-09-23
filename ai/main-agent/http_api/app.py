@@ -11,7 +11,7 @@ from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from app_shell.client_api import ClientContext
@@ -233,6 +233,23 @@ def fleet_vehicles(_user: str = Depends(authenticated_user), organization_id: st
 @app.get("/fleet/document-candidates")
 def fleet_document_candidates(_user: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
     return runtime.client_api.get_fleet_document_candidates(organization_id)
+
+
+@app.get("/fleet/document-candidates/{candidate_id}/content")
+def fleet_document_candidate_content(candidate_id: str, _user: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
+    try:
+        content, content_type, disposition = runtime.fleet_document_candidate_content(organization_id, candidate_id)
+        headers = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+        if disposition:
+            headers["Content-Disposition"] = disposition
+        return Response(content=content, media_type=content_type, headers=headers)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Document candidate not found") from exc
+
+
+@app.get("/fleet/vehicles/{vehicle_id}/work-items")
+def fleet_vehicle_work_items(vehicle_id: str, _user: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
+    return runtime.fleet_vehicle_work_items(organization_id, vehicle_id)
 
 
 @app.post("/fleet/document-candidates/{candidate_id}/assign")
