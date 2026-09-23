@@ -7,6 +7,8 @@ import {
   getFinanceReviewQueue,
   getFleetDocumentCandidates,
   getFleetVehicles,
+  getFleetVehicleWorkItems,
+  getFleetDocumentContent,
   assignFleetDocument,
   dismissFleetDocument,
   getMailFolder,
@@ -18,6 +20,7 @@ import {
   type BootstrapResponse,
   type MailMessage,
   type FleetDocumentCandidate,
+  type FleetWorkItems,
 } from './api';
 
 const MAIL_FOLDERS = [
@@ -42,6 +45,8 @@ export default function App() {
   const [financeReview, setFinanceReview] = useState<BankTransaction[]>([]);
   const [documents, setDocuments] = useState<FleetDocumentCandidate[]>([]);
   const [vehicles, setVehicles] = useState<Array<{ id: string; stateNumber?: string; brand?: string; model?: string }>>([]);
+  const [documentTargets, setDocumentTargets] = useState<Record<string, { vehicleId: string; repairId: string; purchaseId: string }>>({});
+  const [workItems, setWorkItems] = useState<Record<string, FleetWorkItems>>({});
   const [active, setActive] = useState('main_agent');
   const [error, setError] = useState<string | null>(null);
   const [command, setCommand] = useState('');
@@ -68,16 +73,39 @@ export default function App() {
     setVehicles(fleetVehicles);
   }
 
-  async function assignDocument(item: FleetDocumentCandidate, vehicleId: string) {
-    if (!vehicleId) return;
+  async function selectDocumentVehicle(candidateId: string, vehicleId: string) {
+    setDocumentTargets((prev) => ({ ...prev, [candidateId]: { vehicleId, repairId: '', purchaseId: '' } }));
+    if (!vehicleId || workItems[vehicleId]) return;
+    try {
+      const items = await getFleetVehicleWorkItems(vehicleId);
+      setWorkItems((prev) => ({ ...prev, [vehicleId]: items }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось загрузить ремонты и закупки');
+    }
+  }
+
+  async function assignDocument(item: FleetDocumentCandidate) {
+    const target = documentTargets[item.candidate_id];
+    if (!target?.vehicleId) return;
     try {
       setBusy(true);
-      await assignFleetDocument(item.candidate_id, vehicleId);
+      await assignFleetDocument(item.candidate_id, target.vehicleId, target.repairId || undefined, target.purchaseId || undefined);
       await reloadDocuments();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось привязать документ');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function previewDocument(candidateId: string) {
+    try {
+      const blob = await getFleetDocumentContent(candidateId);
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось открыть документ');
     }
   }
 
