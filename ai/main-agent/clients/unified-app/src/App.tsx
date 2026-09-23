@@ -284,10 +284,24 @@ export default function App() {
                   <div className="mail-source">ДОКУМЕНТ</div>
                   <div className="mail-content"><strong>{item.filename}</strong><span>{item.document_type}</span><small>Письмо: {item.source_email_id}</small></div>
                   <div className="connect-actions">
-                    <select disabled={busy} defaultValue="" onChange={(e) => void assignDocument(item, e.target.value)}>
+                    <button disabled={busy} onClick={() => void previewDocument(item.candidate_id)}>Просмотр</button>
+                    <select disabled={busy} value={documentTargets[item.candidate_id]?.vehicleId || ''} onChange={(e) => void selectDocumentVehicle(item.candidate_id, e.target.value)}>
                       <option value="">Выбрать автомобиль</option>
                       {vehicles.map((v) => <option key={v.id} value={v.id}>{v.stateNumber || v.id} · {[v.brand, v.model].filter(Boolean).join(' ')}</option>)}
                     </select>
+                    {documentTargets[item.candidate_id]?.vehicleId ? (
+                      <>
+                        <select disabled={busy} value={documentTargets[item.candidate_id]?.repairId || ''} onChange={(e) => setDocumentTargets((prev) => ({ ...prev, [item.candidate_id]: { ...prev[item.candidate_id], repairId: e.target.value, purchaseId: '' } }))}>
+                          <option value="">Без привязки к ремонту</option>
+                          {(workItems[documentTargets[item.candidate_id].vehicleId]?.repairs || []).map((r) => <option key={r.repair_id} value={r.repair_id}>{r.title || r.repair_id} · {r.status || ''}</option>)}
+                        </select>
+                        <select disabled={busy} value={documentTargets[item.candidate_id]?.purchaseId || ''} onChange={(e) => setDocumentTargets((prev) => ({ ...prev, [item.candidate_id]: { ...prev[item.candidate_id], purchaseId: e.target.value, repairId: '' } }))}>
+                          <option value="">Без привязки к закупке</option>
+                          {(workItems[documentTargets[item.candidate_id].vehicleId]?.purchases || []).map((p) => <option key={p.purchase_id} value={p.purchase_id}>{p.title || p.purchase_id} · {p.status || ''}</option>)}
+                        </select>
+                        <button disabled={busy} onClick={() => void assignDocument(item)}>Подтвердить</button>
+                      </>
+                    ) : null}
                     <button disabled={busy} onClick={() => void dismissDocument(item.candidate_id)}>Отклонить</button>
                   </div>
                 </article>
@@ -304,7 +318,7 @@ export default function App() {
           </div></section>
         )}
 
-        {!['main_agent', 'mail', 'finance'].includes(active) && <section className="placeholder"><h2>{nav.find((x) => x.module_id === active)?.title}</h2><p>Модуль подключён к общей навигации.</p></section>}
+        {!['main_agent', 'mail', 'finance', 'procurement'].includes(active) && <section className="placeholder"><h2>{nav.find((x) => x.module_id === active)?.title}</h2><p>Модуль подключён к общей навигации.</p></section>}
       </main>
     </div>
   );
