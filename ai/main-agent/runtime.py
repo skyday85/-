@@ -204,8 +204,8 @@ class MainAgentRuntime:
     def integration_events(self, user_id: str):
         return self.integration_outbox.list_for_user(user_id)
 
-    def fleet_vehicles(self):
-        return self.fleet_backend.list_vehicles()
+    def fleet_vehicles(self, organization_id: str):
+        return self.fleet_backend.list_vehicles(organization_id)
 
     def fleet_document_candidates(self, organization_id: str):
         return self.fleet_backend.list_document_candidates(organization_id)
