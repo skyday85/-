@@ -210,6 +210,12 @@ class MainAgentRuntime:
     def fleet_document_candidates(self, organization_id: str):
         return self.fleet_backend.list_document_candidates(organization_id)
 
+    def fleet_document_candidate_content(self, organization_id: str, candidate_id: str):
+        return self.fleet_backend.get_document_candidate_content(organization_id, candidate_id)
+
+    def fleet_vehicle_work_items(self, organization_id: str, vehicle_id: str):
+        return self.fleet_backend.get_vehicle_work_items(organization_id, vehicle_id)
+
     def assign_fleet_document_candidate(self, *, organization_id: str, candidate_id: str, vehicle_id: str, purchase_request_id: str | None = None, repair_id: str | None = None):
         return self.fleet_backend.assign_document_candidate(organization_id=organization_id, candidate_id=candidate_id, vehicle_id=vehicle_id, purchase_request_id=purchase_request_id, repair_id=repair_id)
 
