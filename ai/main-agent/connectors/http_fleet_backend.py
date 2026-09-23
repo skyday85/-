@@ -141,6 +141,22 @@ class HttpFleetBackend:
     def list_document_candidates(self, organization_id: str) -> List[Dict[str, Any]]:
         return list(self._get(view="document_candidates", organization_id=organization_id).get("items", []))
 
+    def get_document_candidate_content(self, organization_id: str, candidate_id: str) -> tuple[bytes, str, str]:
+        query = urlencode({"view": "document_candidate_content", "organizationId": organization_id, "candidateId": candidate_id})
+        request = Request(f"{self.base_url}/api/agent/fleet?{query}", headers={"x-main-agent-key": self.api_key}, method="GET")
+        with urlopen(request, timeout=30) as response:
+            content_type = response.headers.get("Content-Type", "application/octet-stream")
+            disposition = response.headers.get("Content-Disposition", "")
+            return response.read(), content_type, disposition
+
+    def get_vehicle_work_items(self, organization_id: str, vehicle_id: str) -> Dict[str, Any]:
+        vehicle = self._get(vehicle_id, organization_id=organization_id).get("vehicle") or {}
+        return {
+            "vehicle_id": vehicle_id,
+            "repairs": [self._id_shape(x, "repair_id") for x in vehicle.get("repairs", [])],
+            "purchases": [self._id_shape(x, "purchase_id") for x in vehicle.get("purchaseRequests", [])],
+        }
+
     def assign_document_candidate(self, *, organization_id: str, candidate_id: str, vehicle_id: str,
                                   purchase_request_id: Optional[str] = None,
                                   repair_id: Optional[str] = None) -> Dict[str, Any]:
