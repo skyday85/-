@@ -227,8 +227,8 @@ def mail_integration_events(user_id: str = Depends(authenticated_user)):
 
 
 @app.get("/fleet/vehicles")
-def fleet_vehicles(_user: str = Depends(authenticated_user)):
-    return {"items": runtime.fleet_vehicles()}
+def fleet_vehicles(_user: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
+    return {"items": runtime.fleet_vehicles(organization_id)}
 
 @app.get("/fleet/document-candidates")
 def fleet_document_candidates(_user: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
