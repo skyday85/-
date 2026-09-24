@@ -148,3 +148,10 @@ export function dismissMailForward(jobId: string) {
     method: 'POST',
   });
 }
+
+export function setMailRoutingRuleStatus(ruleId: string, active: boolean) {
+  return request<ForwardingRule>(`/mail/admin/rules/${encodeURIComponent(ruleId)}/status`, {
+    method: 'POST',
+    body: JSON.stringify({ active }),
+  });
+}
