@@ -256,12 +256,41 @@ class MailAccessDirectory:
             return [self._row(r) for r in db.execute(
                 "SELECT * FROM org_mail_rules WHERE organization_id=?", (org,)).fetchall()]
 
+    def set_rule_enabled(self, org: str, actor: str, rule_id: str, enabled: bool) -> dict:
+        self.require_admin(org, actor)
+        with self._lock, self._db() as db:
+            row = db.execute("SELECT * FROM org_mail_rules WHERE organization_id=? AND rule_id=?",
+                             (org, rule_id)).fetchone()
+            if row is None:
+                raise KeyError(rule_id)
+            if enabled and row["mode"] == "auto":
+                self.assert_grant(org, actor, owner=row["owner_user_id"], provider=row["provider"],
+                                  account_id=row["account_id"], forwarding=True)
+            db.execute("UPDATE org_mail_rules SET enabled=? WHERE organization_id=? AND rule_id=?",
+                       (int(enabled), org, rule_id))
+        return self.get_rule(rule_id)
+
     def rules_for_account(self, org: str, owner: str, provider: str, account_id: str) -> list[dict]:
         with self._db() as db:
             return [self._row(r) for r in db.execute("""
-                SELECT * FROM org_mail_rules WHERE organization_id=?
-                AND owner_user_id=? AND provider=? AND account_id=? AND enabled=1""",
-                (org, owner, provider, account_id)).fetchall()]
+                SELECT r.* FROM org_mail_rules r WHERE r.organization_id=?
+                AND r.owner_user_id=? AND r.provider=? AND r.account_id=? AND r.enabled=1
+                AND EXISTS (
+                  SELECT 1 FROM org_mail_grants g JOIN org_mail_users u
+                     ON u.organization_id=g.organization_id AND u.user_id=g.recipient_user_id
+                  WHERE g.organization_id=r.organization_id
+                     AND g.owner_user_id=r.owner_user_id AND g.provider=r.provider
+                     AND g.account_id=r.account_id AND u.active=1
+                )
+                AND (r.mode != 'auto' OR EXISTS (
+                  SELECT 1 FROM org_mail_grants g JOIN org_mail_users u
+                     ON u.organization_id=g.organization_id AND u.user_id=g.recipient_user_id
+                  WHERE g.organization_id=r.organization_id
+                     AND g.owner_user_id=r.owner_user_id AND g.provider=r.provider
+                     AND g.account_id=r.account_id AND g.recipient_user_id=r.created_by
+                     AND g.can_forward=1 AND u.active=1
+                     AND u.role IN ('owner', 'admin')
+                ))""", (org, owner, provider, account_id)).fetchall()]
 
     def queue_job(self, *, rule: dict, email_id: str, matched_in: str) -> dict:
         job_id = str(uuid4())
@@ -315,10 +344,10 @@ class MailAccessDirectory:
             self.get_job(org, actor, job_id, forwarding=True)
         with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("""SELECT j.*, r.mode FROM org_mail_forward_jobs j
+            row = db.execute("""SELECT j.*, r.mode, r.enabled FROM org_mail_forward_jobs j
                 JOIN org_mail_rules r ON r.rule_id=j.rule_id
                 WHERE j.job_id=? AND j.organization_id=?""", (job_id, org)).fetchone()
-            if row is None or row["status"] != "pending_review":
+            if row is None or row["status"] != "pending_review" or not row["enabled"]:
                 raise ValueError("Forwarding job is not pending")
             if automated and (row["mode"] != "auto" or not row["owner_user_id"] == actor):
                 raise AccessDenied("Automatic forwarding is not authorized")
