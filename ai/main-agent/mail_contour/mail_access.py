@@ -50,6 +50,14 @@ class MailAccessDirectory:
                   can_forward INTEGER NOT NULL DEFAULT 0,
                   PRIMARY KEY (organization_id, owner_user_id, provider, account_id, recipient_user_id)
                 );
+                CREATE TABLE IF NOT EXISTS org_mail_connections (
+                  organization_id TEXT NOT NULL,
+                  owner_user_id TEXT NOT NULL,
+                  provider TEXT NOT NULL,
+                  account_id TEXT NOT NULL,
+                  address TEXT NOT NULL,
+                  PRIMARY KEY (organization_id, owner_user_id, provider, account_id)
+                );
                 CREATE TABLE IF NOT EXISTS org_mail_rules (
                   rule_id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
                   owner_user_id TEXT NOT NULL, provider TEXT NOT NULL,
@@ -150,6 +158,39 @@ class MailAccessDirectory:
             db.execute("UPDATE org_mail_users SET active=? WHERE organization_id=? AND user_id=?",
                        (int(active), org, user_id))
         return self.require_member(org, user_id) if active else {"user_id": user_id, "active": False}
+
+    def register_oauth_connection(self, org: str, owner: str, *, provider: str,
+                                  account_id: str, address: str) -> dict:
+        """Call only after provider OAuth callback was verified for owner/org."""
+        self.require_admin(org, owner)
+        if provider not in {"gmail", "outlook"} or not account_id.strip():
+            raise ValueError("Invalid verified provider account")
+        with self._lock, self._db() as db:
+            db.execute("""INSERT INTO org_mail_connections
+                (organization_id, owner_user_id, provider, account_id, address)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(organization_id, owner_user_id, provider, account_id)
+                DO UPDATE SET address=excluded.address""",
+                (org, owner, provider, account_id, _email(address)))
+        return {"organization_id": org, "owner_user_id": owner,
+                "provider": provider, "account_id": account_id, "address": _email(address)}
+
+    def connected_in_org(self, org: str, actor: str, *, owner: str) -> list[dict]:
+        self.require_admin(org, actor)
+        self.require_member(org, owner)
+        with self._db() as db:
+            return [self._row(r) for r in db.execute("""
+                SELECT * FROM org_mail_connections
+                WHERE organization_id=? AND owner_user_id=?
+                ORDER BY address""", (org, owner)).fetchall()]
+
+    def require_org_connection(self, org: str, actor: str, *, owner: str,
+                               provider: str, account_id: str) -> dict:
+        authorized = self.connected_in_org(org, actor, owner=owner)
+        for account in authorized:
+            if account["provider"] == provider and account["account_id"] == account_id:
+                return account
+        raise AccessDenied("Mailbox was not explicitly connected to this organization")
 
     def grant_account(self, org: str, actor: str, *, owner_user_id: str, provider: str,
                       account_id: str, recipient_user_id: str, address: str,
