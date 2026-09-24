@@ -176,6 +176,13 @@ def collapse_for_view(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             "source_accounts": sources,
             "source_count": len(sources),
             "copy_count": len(copies),
+            "group_folders": sorted({str(c.get("smart_folder") or "other") for c in copies}),
+            "group_classifications": sorted({str(c["classification"]) for c in copies if c.get("classification")}),
+            "group_routes": sorted({str(c["route_to"]) for c in copies if c.get("route_to")}),
+            "group_search_text": " ".join(
+                str(part or "") for copy in copies for part in
+                (copy.get("sender"), copy.get("subject"), copy.get("body_text"))
+            )[:80_000].casefold(),
         })
     merged.sort(key=lambda item: (item.get("importance") == "high",
                                    item.get("received_at") or ""), reverse=True)
