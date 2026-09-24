@@ -123,7 +123,17 @@ export function getFleetVehicles() {
 }
 
 export function getFleetDocumentCandidates() {
-  return request<{ items: FleetDocumentCandidate[] }>('/fleet/document-candidates').then((r) => r.items);
+  return request<{ items: Array<Record<string, unknown>> }>('/fleet/document-candidates').then((r) =>
+    r.items.map((row) => ({
+      candidate_id: String(row.candidate_id || row.id),
+      source_email_id: String(row.source_email_id || row.sourceEmailId || ''),
+      attachment_id: String(row.attachment_id || row.sourceAttachmentId || ''),
+      filename: String(row.filename || row.originalName || ''),
+      document_type: String(row.document_type || row.documentType || ''),
+      status: String(row.status || ''),
+      suggested_vehicle_id: row.suggested_vehicle_id ? String(row.suggested_vehicle_id) : null,
+    }))
+  );
 }
 
 export type FleetWorkItems = {
