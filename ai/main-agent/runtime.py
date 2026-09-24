@@ -379,6 +379,7 @@ class MainAgentRuntime:
     def sync_visible_mail(self, org: str, viewer: str):
         grants = self.mail_directory.grants(org, viewer)
         results, imported, failed, seen = [], [], [], set()
+        duplicates_suppressed = 0
         for grant in grants:
             owner, account_id = grant["owner_user_id"], grant["account_id"]
             if (owner, account_id) in seen:
@@ -390,13 +391,17 @@ class MainAgentRuntime:
                 results.append({"owner_user_id": owner, **result})
                 for email_id in result["imported_email_ids"]:
                     try:
-                        self.process_mail(owner, email_id, organization_id=org)
+                        processed = self.process_mail(owner, email_id, organization_id=org)
+                        if processed.get("duplicate_suppressed"):
+                            duplicates_suppressed += 1
                         imported.append(self._scoped_mail_id(owner, email_id))
                     except Exception:
                         failed.append(self._scoped_mail_id(owner, email_id))
             except Exception:
                 failed.append(f"{owner}:account_sync_failed")
         return {"accounts": results, "total_imported": len(imported),
+                "duplicates_suppressed": duplicates_suppressed,
+                "unique_processed": len(imported) - duplicates_suppressed,
                 "imported_email_ids": imported, "processing_failed_email_ids": failed}
 
     def process_mail_routing(self, org: str, owner: str, original: dict):
