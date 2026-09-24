@@ -311,6 +311,10 @@ def oauth_callback(provider: Literal["gmail", "outlook"], request: Request, stat
         raise HTTPException(status_code=400, detail="OAuth code is missing")
     redirect_uri = f"{public_api_base(request)}/mail/oauth/{provider}/callback"
     account = runtime.complete_mail_authorization(user_id=user_id, provider=provider, code=code, redirect_uri=redirect_uri, state=state)
+    runtime.mail_directory.register_oauth_connection(
+        organization_id, user_id, provider=provider, account_id=account.account_id,
+        address=account.address
+    )
     runtime.mail_directory.grant_account(organization_id, user_id, owner_user_id=user_id,
          provider=provider, account_id=account.account_id, recipient_user_id=user_id,
          address=account.address, can_forward=True)
