@@ -122,16 +122,24 @@ def collapse_for_view(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         # Message-ID; same_message rejects conflicting Internet IDs.
         if sig:
             candidates += [i for i in by_content.get(sig, []) if i not in candidates]
-        matching = next(
-            (index for index in candidates
-             if any(same_message(existing, row) for existing in groups[index])
-             and not any(
-                 internet_id(existing) and internet_id(row)
-                 and internet_id(existing) != internet_id(row)
-                 for existing in groups[index]
-             )),
-            None,
-        )
+        def compatible(index: int) -> bool:
+            # An unreadable copy without a Message-ID must not bridge two
+            # separate, correctly identified messages sharing a template.
+            return (
+                any(same_message(existing, row) for existing in groups[index])
+                and not any(
+                    internet_id(existing) and internet_id(row)
+                    and internet_id(existing) != internet_id(row)
+                    for existing in groups[index]
+                )
+            )
+
+        authoritative = [i for i in by_mid.get(mid, []) if compatible(i)] if mid else []
+        if authoritative:
+            matching = authoritative[0]
+        else:
+            fallback_matches = [i for i in candidates if compatible(i)]
+            matching = fallback_matches[0] if len(fallback_matches) == 1 else None
         if matching is None:
             matching = len(groups)
             groups.append([])
