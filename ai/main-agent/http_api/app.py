@@ -125,7 +125,17 @@ if os.getenv("APP_ENV", "development") == "development":
 app.add_middleware(CORSMiddleware, allow_origins=sorted(set(allowed_origins)), allow_credentials=True, allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Authenticated-User", "X-Organization-Id", "X-Device-Id", "X-App-Version"])
 
 
+def _trusted_identity(request: Request) -> None:
+    if os.getenv("APP_ENV", "development") != "production":
+        return
+    expected = os.getenv("APP_TRUSTED_PROXY_SECRET", "")
+    provided = request.headers.get("X-Trusted-Proxy-Secret", "")
+    if not expected or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Trusted authentication proxy required")
+
+
 def authenticated_user(request: Request) -> str:
+    _trusted_identity(request)
     env = os.getenv("APP_ENV", "development")
     user = request.headers.get("X-Authenticated-User", "").strip()
     if user:
@@ -136,6 +146,7 @@ def authenticated_user(request: Request) -> str:
 
 
 def authenticated_organization(request: Request) -> str:
+    _trusted_identity(request)
     organization_id = request.headers.get("X-Organization-Id", "").strip()
     if organization_id:
         return organization_id
