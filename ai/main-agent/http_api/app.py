@@ -217,8 +217,8 @@ def process_mail(email_id: str, user_id: str = Depends(authenticated_user), orga
 
 
 @app.post("/mail/sync")
-def sync_mail(user_id: str = Depends(authenticated_user)):
-    return runtime.client_api.refresh_mail(user_id)
+def sync_mail(user_id: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
+    return runtime.client_api.refresh_mail(user_id, organization_id=organization_id)
 
 
 @app.get("/mail/integration-events")
