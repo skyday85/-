@@ -72,5 +72,5 @@ class FleetDocumentQueue:
             raise KeyError(candidate_id)
         item.status = "dismissed"
         if self.persistence:
-            self.persistence.put("fleet_document_candidates", {"candidate_id": item.candidate_id, "organization_id": item.organization_id}, asdict(item))
+            self.persistence.put("fleet_document_candidates", {"candidate_id": item.candidate_id, "organization_id": item.organization_id, "user_id": item.user_id}, asdict(item))
         return asdict(item)
