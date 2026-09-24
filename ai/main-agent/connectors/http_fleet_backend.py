@@ -1,5 +1,6 @@
 import json
 import os
+import uuid
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -15,14 +16,21 @@ class HttpFleetBackend:
             raise RuntimeError("FLEET_API_BASE_URL is required")
         if not self.api_key:
             raise RuntimeError("FLEET_MAIN_AGENT_API_KEY is required")
+        if not self.base_url.startswith("https://") and not (
+            self.base_url.startswith("http://localhost") or self.base_url.startswith("http://127.0.0.1")
+        ):
+            raise RuntimeError("Fleet API must use HTTPS outside localhost")
 
     def _request(self, method: str, *, vehicle_id: Optional[str] = None,
-                 view: Optional[str] = None, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                 view: Optional[str] = None, organization_id: Optional[str] = None,
+                 payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         params: Dict[str, str] = {}
         if vehicle_id:
             params["vehicleId"] = vehicle_id
         if view:
             params["view"] = view
+        if organization_id:
+            params["organizationId"] = organization_id
         query = f"?{urlencode(params)}" if params else ""
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         headers = {"x-main-agent-key": self.api_key, "accept": "application/json"}
@@ -32,14 +40,15 @@ class HttpFleetBackend:
         with urlopen(request, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def _get(self, vehicle_id: Optional[str] = None, view: Optional[str] = None) -> Dict[str, Any]:
-        return self._request("GET", vehicle_id=vehicle_id, view=view)
+    def _get(self, vehicle_id: Optional[str] = None, view: Optional[str] = None,
+             organization_id: Optional[str] = None) -> Dict[str, Any]:
+        return self._request("GET", vehicle_id=vehicle_id, view=view, organization_id=organization_id)
 
-    def list_vehicles(self) -> List[Dict[str, Any]]:
-        return [self._vehicle_shape(row) for row in self._get().get("vehicles", [])]
+    def list_vehicles(self, organization_id: str) -> List[Dict[str, Any]]:
+        return [self._vehicle_shape(row) for row in self._get(organization_id=organization_id).get("vehicles", [])]
 
-    def get_vehicle(self, vehicle_id: str) -> Optional[Dict[str, Any]]:
-        row = self._get(vehicle_id).get("vehicle")
+    def get_vehicle(self, vehicle_id: str, organization_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        row = self._get(vehicle_id, organization_id=organization_id).get("vehicle")
         return self._vehicle_shape(row) if row else None
 
     def get_vehicle_history(self, vehicle_id: str) -> List[Dict[str, Any]]:
@@ -67,6 +76,107 @@ class HttpFleetBackend:
         })
         repair = result["repair"]
         return {**repair, "repair_id": repair.get("id"), "audit_recorded": bool(result.get("audit", {}).get("recorded"))}
+
+    def create_document_candidate(
+        self,
+        *,
+        organization_id: str,
+        source_user_id: str,
+        source_email_id: str,
+        source_attachment_id: str,
+        original_name: str,
+        mime_type: Optional[str] = None,
+        size_bytes: Optional[int] = None,
+        document_type: str = "parts_invoice",
+        metadata: Optional[Dict[str, Any]] = None,
+        content_bytes: bytes,
+    ) -> Dict[str, Any]:
+        if not content_bytes:
+            raise ValueError("content_bytes is required for fleet document transfer")
+        if len(content_bytes) > 25 * 1024 * 1024:
+            raise ValueError("attachment exceeds 25 MB fleet transfer limit")
+
+        boundary = f"----MainAgent{uuid.uuid4().hex}"
+        fields = {
+            "action": "create_document_candidate",
+            "organizationId": organization_id,
+            "sourceUserId": source_user_id,
+            "sourceEmailId": source_email_id,
+            "sourceAttachmentId": source_attachment_id,
+            "originalName": original_name,
+            "mimeType": mime_type or "application/octet-stream",
+            "documentType": document_type,
+            "metadata": json.dumps(metadata or {}, ensure_ascii=False),
+        }
+        chunks: List[bytes] = []
+        for name, value in fields.items():
+            chunks.extend([
+                f"--{boundary}\r\n".encode(),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+                str(value).encode("utf-8"),
+                b"\r\n",
+            ])
+        safe_name = original_name.replace("\\", "_").replace('"', "_").replace("\r", "_").replace("\n", "_")
+        chunks.extend([
+            f"--{boundary}\r\n".encode(),
+            f'Content-Disposition: form-data; name="file"; filename="{safe_name}"\r\n'.encode(),
+            f"Content-Type: {(mime_type or 'application/octet-stream')}\r\n\r\n".encode(),
+            content_bytes,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode(),
+        ])
+        request = Request(
+            f"{self.base_url}/api/agent/fleet",
+            data=b"".join(chunks),
+            headers={
+                "x-main-agent-key": self.api_key,
+                "accept": "application/json",
+                "content-type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))["candidate"]
+
+    def list_document_candidates(self, organization_id: str) -> List[Dict[str, Any]]:
+        return list(self._get(view="document_candidates", organization_id=organization_id).get("items", []))
+
+    def get_document_candidate_content(self, organization_id: str, candidate_id: str) -> tuple[bytes, str, str]:
+        query = urlencode({"view": "document_candidate_content", "organizationId": organization_id, "candidateId": candidate_id})
+        request = Request(f"{self.base_url}/api/agent/fleet?{query}", headers={"x-main-agent-key": self.api_key}, method="GET")
+        with urlopen(request, timeout=30) as response:
+            content_type = response.headers.get("Content-Type", "application/octet-stream")
+            disposition = response.headers.get("Content-Disposition", "")
+            return response.read(), content_type, disposition
+
+    def get_vehicle_work_items(self, organization_id: str, vehicle_id: str) -> Dict[str, Any]:
+        vehicle = self._get(vehicle_id, organization_id=organization_id).get("vehicle") or {}
+        return {
+            "vehicle_id": vehicle_id,
+            "repairs": [self._id_shape(x, "repair_id") for x in vehicle.get("repairs", [])],
+            "purchases": [self._id_shape(x, "purchase_id") for x in vehicle.get("purchaseRequests", [])],
+        }
+
+    def assign_document_candidate(self, *, organization_id: str, candidate_id: str, vehicle_id: str,
+                                  purchase_request_id: Optional[str] = None,
+                                  repair_id: Optional[str] = None) -> Dict[str, Any]:
+        result = self._request("POST", payload={
+            "action": "assign_document_candidate",
+            "organizationId": organization_id,
+            "candidateId": candidate_id,
+            "vehicleId": vehicle_id,
+            "purchaseRequestId": purchase_request_id,
+            "repairId": repair_id,
+        })
+        return result["candidate"]
+
+    def dismiss_document_candidate(self, *, organization_id: str, candidate_id: str) -> Dict[str, Any]:
+        result = self._request("POST", payload={
+            "action": "dismiss_document_candidate",
+            "organizationId": organization_id,
+            "candidateId": candidate_id,
+        })
+        return result["candidate"]
 
     def get_maintenance_status(self, vehicle_id: str) -> Dict[str, Any]:
         vehicle = self._get(vehicle_id).get("vehicle", {})

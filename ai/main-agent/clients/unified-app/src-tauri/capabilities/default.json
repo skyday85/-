@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default-capability",
+  "description": "Minimal permissions for the unified Main Agent client",
+  "windows": ["main"],
+  "platforms": ["macOS", "iOS"],
+  "permissions": ["core:default"]
+}
