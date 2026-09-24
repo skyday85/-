@@ -95,6 +95,19 @@ class UnifiedMailbox:
             provider_message_id = str(row["provider_message_id"])
             provider_key = (user_id, account.provider, account_id, provider_message_id)
             if provider_key in self._provider_keys:
+                # Older stored messages may predate Internet Message-ID support.
+                # Upgrade their identity when the provider returns that source
+                # copy again; never count it as a new physical email.
+                existing_id = self._provider_keys[provider_key]
+                existing = self.messages.get((user_id, existing_id))
+                new_message_id = row.get("internet_message_id")
+                if existing and new_message_id and not existing.internet_message_id:
+                    existing.internet_message_id = str(new_message_id)
+                    if self.persistence:
+                        self.persistence.put(
+                            "mail_messages", {"user_id": user_id, "email_id": existing_id},
+                            self._serialize(existing),
+                        )
                 continue
             email_id = str(row.get("email_id") or f"{account.provider}:{account_id}:{provider_message_id}")
             message_key = (user_id, email_id)
