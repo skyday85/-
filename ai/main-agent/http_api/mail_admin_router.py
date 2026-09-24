@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from mail_contour.mail_access import AccessDenied
@@ -141,5 +143,42 @@ def build_mail_admin_router(runtime, authenticated_user, authenticated_organizat
             return runtime.mail_directory.dismiss_job(org, actor, job_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Forwarding candidate not found") from exc
+
+
+    @router.get("/forward-jobs/{job_id}/preview")
+    def preview(job_id: str, actor: str = Depends(authenticated_user),
+                org: str = Depends(authenticated_organization)):
+        try:
+            job = runtime.mail_directory.get_job(org, actor, job_id)
+            message = runtime.visible_mail_message(
+                org, actor, runtime._scoped_mail_id(job["owner_user_id"], job["email_id"]))
+            return {"job": job, "message": {
+                "subject": message["subject"], "sender": message["sender"],
+                "body_text": message["body_text"][:30_000],
+                "received_at": message["received_at"], "attachments": message["attachments"]
+            }}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Source message not found") from exc
+
+    @router.get("/forward-jobs/{job_id}/attachments/{attachment_id}")
+    def download_attachment(job_id: str, attachment_id: str,
+                            actor: str = Depends(authenticated_user),
+                            org: str = Depends(authenticated_organization)):
+        try:
+            job = runtime.mail_directory.get_job(org, actor, job_id)
+            message = runtime.mail_collector.mailbox.get_message(job["owner_user_id"], job["email_id"])
+            matching = [a for a in message["attachments"] if a["attachment_id"] == attachment_id]
+            if not matching:
+                raise KeyError(attachment_id)
+            source = runtime.fetch_mail_attachment(job["owner_user_id"], job["email_id"], attachment_id)
+            content = source["content_bytes"]
+            if len(content) > 10 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail="Attachment preview exceeds 10MB")
+            filename = str(matching[0].get("filename") or "attachment")
+            return Response(content, media_type="application/octet-stream",
+                headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote(filename),
+                         "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Attachment not found") from exc
 
     return router
