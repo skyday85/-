@@ -19,7 +19,7 @@ class AccessDenied(PermissionError):
 def _email(value: str) -> str:
     value = value.strip()
     name, address = parseaddr(value)
-    if name or address != value or not re.fullmatch(r"[^\\s@<>]+@[^\\s@<>]+\\.[^\\s@<>]+", value):
+    if name or address != value or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", value):
         raise ValueError("A valid plain email address is required")
     return address.lower()
 
@@ -271,6 +271,14 @@ class MailAccessDirectory:
             row = db.execute("""SELECT * FROM org_mail_forward_jobs
                 WHERE organization_id=? AND rule_id=? AND owner_user_id=? AND email_id=?""",
                 (rule["organization_id"], rule["rule_id"], rule["owner_user_id"], email_id)).fetchone()
+        return self._row(row)
+
+    def system_job(self, org: str, job_id: str) -> dict:
+        with self._db() as db:
+            row = db.execute("SELECT * FROM org_mail_forward_jobs WHERE organization_id=? AND job_id=?",
+                             (org, job_id)).fetchone()
+        if row is None:
+            raise KeyError(job_id)
         return self._row(row)
 
     def get_job(self, org: str, actor: str, job_id: str, *, forwarding: bool = False) -> dict:
