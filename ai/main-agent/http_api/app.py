@@ -216,8 +216,8 @@ def finance_confirm(transaction_id: str, payload: ConfirmClassificationRequest, 
 
 
 @app.get("/mail/inbox")
-def inbox(account_id: list[str] = Query(default=[]), unread_only: bool = False, classification: Optional[str] = None, routed_to: Optional[str] = None, search: Optional[str] = None, smart_folder: Optional[str] = None, user_id: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
-    return runtime.visible_mailbox(organization_id, user_id, account_ids=account_id, unread_only=unread_only, classification=classification, routed_to=routed_to, search=search, smart_folder=smart_folder)
+def inbox(account_id: list[str] = Query(default=[]), source_id: Optional[str] = None, unread_only: bool = False, classification: Optional[str] = None, routed_to: Optional[str] = None, search: Optional[str] = None, smart_folder: Optional[str] = None, user_id: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
+    return runtime.visible_mailbox(organization_id, user_id, account_ids=account_id, source_id=source_id, unread_only=unread_only, classification=classification, routed_to=routed_to, search=search, smart_folder=smart_folder)
 
 
 @app.get("/mail/messages/{email_id}")
