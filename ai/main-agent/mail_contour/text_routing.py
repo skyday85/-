@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from itertools import islice
 import shutil
 import subprocess
 import tempfile
@@ -55,7 +56,7 @@ def attachment_text(content: bytes, mime: str) -> tuple[str, str]:
             if reader.is_encrypted:
                 return "", "encrypted_pdf"
             result: list[str] = []
-            for page in list(reader.pages)[:5]:
+            for page in islice(reader.pages, 5):
                 result.append((page.extract_text() or "")[:15_000])
             text = "\n".join(result)[:50_000]
             if text.strip():
@@ -126,7 +127,7 @@ class MailTextRouter:
             return {"jobs": [], "recognition": []}
         main_text = message_text(message).casefold()
         need_attachments = [r for r in rules if r["scan_attachments"] and
-                            (r["match_text"] == "*" or r["match_text"] not in main_text)]
+                            (r["match_text"] != "*" and r["match_text"] not in main_text)]
         attachments: list[dict] = []
         if need_attachments:
             for item in message.get("attachments", [])[:8]:
