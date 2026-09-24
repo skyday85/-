@@ -1,5 +1,7 @@
 import base64
+import json
 import os
+from dataclasses import asdict
 
 from agents.delegation import DelegationEngine
 from agents.registry import AgentRegistry
@@ -13,6 +15,8 @@ from finance.invoices import InvoiceWorkflow
 from integrations.events import IntegrationOutbox
 from integrations.fleet_documents import FleetDocumentQueue
 from integrations.http_dispatcher import HttpIntegrationDispatcher
+from mail_contour.mail_access import MailAccessDirectory, AccessDenied
+from mail_contour.text_routing import MailTextRouter
 from mail_contour.mail_collector_agent import MailCollectorAgent
 from mail_contour.persistence import MailPersistence
 from mail_contour.provider_adapters import GmailProviderAdapter, OutlookProviderAdapter
@@ -35,6 +39,13 @@ class MainAgentRuntime:
         self.delegation = DelegationEngine(self.agent_registry)
         db_path = os.getenv("MAIL_DATABASE_PATH", "./data/mail_contour.sqlite3")
         self.mail_persistence = MailPersistence(db_path)
+        self.mail_directory = MailAccessDirectory(db_path)
+        bootstrap_org = os.getenv("APP_ORGANIZATION_ID", "").strip()
+        bootstrap_user = os.getenv("MAIL_BOOTSTRAP_OWNER_USER_ID", "").strip()
+        bootstrap_email = os.getenv("MAIL_BOOTSTRAP_OWNER_EMAIL", "").strip()
+        if bootstrap_org and bootstrap_user and bootstrap_email:
+            self.mail_directory.bootstrap_owner(bootstrap_org, bootstrap_user, bootstrap_email)
+        self.mail_text_router = MailTextRouter(self.mail_directory, self.fetch_mail_attachment)
         self.integration_outbox = IntegrationOutbox(self.mail_persistence)
         self.integration_dispatcher = self._build_integration_dispatcher()
         self.fleet_document_queue = FleetDocumentQueue(self.mail_persistence)
@@ -138,6 +149,8 @@ class MainAgentRuntime:
             message["integration_delivery"] = integration_delivery
         if fleet_delivery:
             message["fleet_document_delivery"] = fleet_delivery
+        if organization_id:
+            message["text_routing"] = self.process_mail_routing(organization_id, user_id, message)
         return message
 
     def fetch_mail_attachment(self, user_id: str, email_id: str, attachment_id: str):
@@ -224,6 +237,130 @@ class MainAgentRuntime:
 
     def client_manifest(self, device: str):
         return self.app_shell.build_client_manifest(device)
+
+
+    @staticmethod
+    def _scoped_mail_id(owner: str, email_id: str) -> str:
+        payload = json.dumps([owner, email_id], separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+
+    @staticmethod
+    def _decode_scoped_mail_id(value: str) -> tuple[str, str]:
+        try:
+            decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+            owner, email_id = json.loads(decoded)
+            if not isinstance(owner, str) or not isinstance(email_id, str):
+                raise ValueError("Malformed identifier")
+            return owner, email_id
+        except (ValueError, TypeError, UnicodeError) as exc:
+            raise KeyError("Invalid scoped email identifier") from exc
+
+    def visible_mailbox(self, org: str, viewer: str, *, account_ids=None, unread_only=False,
+                        classification=None, routed_to=None, search=None, smart_folder=None):
+        self.mail_directory.require_member(org, viewer)
+        rows, seen = [], set()
+        for grant in self.mail_directory.grants(org, viewer):
+            owner, account_id = grant["owner_user_id"], grant["account_id"]
+            key = (owner, grant["provider"], account_id)
+            if key in seen or (account_ids and account_id not in account_ids):
+                continue
+            seen.add(key)
+            for msg in self.mail_sync.inbox(owner, account_ids=[account_id], unread_only=unread_only,
+                                            classification=classification, routed_to=routed_to,
+                                            search=search, smart_folder=smart_folder):
+                rows.append({**msg, "email_id": self._scoped_mail_id(owner, msg["email_id"]),
+                             "viewer_user_id": viewer, "source_owner_user_id": owner,
+                             "source_account_address": grant["address"]})
+        rows.sort(key=lambda item: (item.get("importance") == "high", item["received_at"]), reverse=True)
+        return rows
+
+    def visible_mail_message(self, org: str, viewer: str, scoped_email_id: str):
+        owner, email_id = self._decode_scoped_mail_id(scoped_email_id)
+        original = self.mail_collector.mailbox.get_message(owner, email_id)
+        account = self.mail_collector.mailbox.accounts[(owner, original["account_id"])]
+        grant = self.mail_directory.assert_grant(org, viewer, owner=owner,
+                 provider=account.provider, account_id=original["account_id"])
+        return {**original, "email_id": scoped_email_id, "viewer_user_id": viewer,
+                "source_owner_user_id": owner, "source_account_address": grant["address"]}
+
+    def visible_process_mail(self, org: str, viewer: str, scoped_email_id: str):
+        self.visible_mail_message(org, viewer, scoped_email_id)
+        owner, email_id = self._decode_scoped_mail_id(scoped_email_id)
+        result = self.process_mail(owner, email_id, organization_id=org)
+        return {**result, "email_id": scoped_email_id, "source_owner_user_id": owner}
+
+    def visible_mail_state(self, org: str, viewer: str):
+        grants = self.mail_directory.grants(org, viewer)
+        connections = []
+        for grant in grants:
+            try:
+                state = self.mail_providers.get(grant["provider"]).connection_state(
+                    grant["owner_user_id"], grant["account_id"])
+                connections.append({**asdict(state), "address": grant["address"],
+                                    "source_owner_user_id": grant["owner_user_id"]})
+            except (KeyError, RuntimeError):
+                connections.append({"provider": grant["provider"], "account_id": grant["account_id"],
+                                    "connected": False, "reauth_required": True,
+                                    "source_owner_user_id": grant["owner_user_id"]})
+        return {"accounts": grants, "connections": connections}
+
+    def sync_visible_mail(self, org: str, viewer: str):
+        grants = self.mail_directory.grants(org, viewer)
+        results, imported, failed, seen = [], [], [], set()
+        for grant in grants:
+            owner, account_id = grant["owner_user_id"], grant["account_id"]
+            if (owner, account_id) in seen:
+                continue
+            seen.add((owner, account_id))
+            try:
+                self.refresh_mail_accounts(owner)
+                result = self.mail_sync.sync_account(owner, account_id)
+                results.append({"owner_user_id": owner, **result})
+                for email_id in result["imported_email_ids"]:
+                    try:
+                        self.process_mail(owner, email_id, organization_id=org)
+                        imported.append(self._scoped_mail_id(owner, email_id))
+                    except Exception:
+                        failed.append(self._scoped_mail_id(owner, email_id))
+            except Exception:
+                failed.append(f"{owner}:account_sync_failed")
+        return {"accounts": results, "total_imported": len(imported),
+                "imported_email_ids": imported, "processing_failed_email_ids": failed}
+
+    def process_mail_routing(self, org: str, owner: str, original: dict):
+        account = self.mail_collector.mailbox.accounts[(owner, original["account_id"])]
+        inspection = self.mail_text_router.inspect(organization_id=org, owner_user_id=owner,
+                                                    message=original, provider=account.provider)
+        delivered = []
+        for entry in inspection["jobs"]:
+            job = self.mail_directory.system_job(org, entry["job_id"])
+            rule = self.mail_directory.get_rule(job["rule_id"])
+            if (rule["mode"] == "auto" and entry["matched_in"] != "unverified_attachment"
+                    and job["status"] == "pending_review"):
+                try:
+                    self._deliver_forward(org, owner, entry["job_id"], automated=True)
+                    delivered.append(entry["job_id"])
+                except Exception:
+                    pass
+        return {**inspection, "auto_forwarded_job_ids": delivered}
+
+    def _deliver_forward(self, org: str, actor: str, job_id: str, *, automated: bool = False):
+        job = self.mail_directory.claim_job(org, actor, job_id, automated=automated)
+        try:
+            message = self.mail_collector.mailbox.get_message(job["owner_user_id"], job["email_id"])
+            if message["account_id"] != job["account_id"]:
+                raise AccessDenied("Forward job account does not match source email")
+            result = self.mail_providers.get(job["provider"]).forward_message(
+                job["owner_user_id"], job["account_id"], message["provider_message_id"],
+                job["destination"])
+            self.mail_directory.finish_job(job_id, success=True, provider_result=str(result))
+            return {"job_id": job_id, "status": "forwarded", "provider": job["provider"]}
+        except Exception:
+            self.mail_directory.finish_job(job_id, success=False, error_code="verify_provider_delivery")
+            raise
+
+    def approve_forward(self, org: str, actor: str, job_id: str):
+        return self._deliver_forward(org, actor, job_id)
 
 
 def build_runtime():
