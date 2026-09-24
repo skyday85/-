@@ -118,6 +118,15 @@ def build_mail_admin_router(runtime, authenticated_user, authenticated_organizat
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @router.post("/admin/rules/{rule_id}/status")
+    def change_rule_status(rule_id: str, payload: ChangeStatus,
+                           actor: str = Depends(authenticated_user),
+                           org: str = Depends(authenticated_organization)):
+        try:
+            return runtime.mail_directory.set_rule_enabled(org, actor, rule_id, payload.active)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Mail routing rule not found") from exc
+
     @router.get("/forward-jobs")
     def forward_jobs(actor: str = Depends(authenticated_user), org: str = Depends(authenticated_organization)):
         return {"items": runtime.mail_directory.review_jobs(org, actor)}
