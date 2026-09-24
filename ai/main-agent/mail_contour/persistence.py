@@ -62,7 +62,8 @@ class MailPersistence:
         columns = list(key_columns) + ["data"]
         values = [key_columns[x] for x in key_columns] + [json.dumps(data, ensure_ascii=False)]
         placeholders = ",".join("?" for _ in columns)
-        conflict = ",".join(key_columns)
+        conflict_keys = {"integration_events": ("event_id",), "fleet_document_candidates": ("candidate_id",)}.get(table)
+        conflict = ",".join(conflict_keys or key_columns.keys())
         update = "data=excluded.data"
         with self._lock, self._connect() as db:
             db.execute(
