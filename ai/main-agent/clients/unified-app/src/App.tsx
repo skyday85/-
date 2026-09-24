@@ -11,7 +11,6 @@ import {
   getFleetDocumentContent,
   assignFleetDocument,
   dismissFleetDocument,
-  getMailFolder,
   getUnifiedInbox,
   processMailMessage,
   refreshMail as syncMail,
@@ -44,6 +43,7 @@ export default function App() {
   const [boot, setBoot] = useState<BootstrapResponse | null>(null);
   const [mail, setMail] = useState<MailMessage[]>([]);
   const [mailFolder, setMailFolder] = useState<string>('all');
+  const [mailSource, setMailSource] = useState<string>('');
   const [financeReview, setFinanceReview] = useState<BankTransaction[]>([]);
   const [documents, setDocuments] = useState<FleetDocumentCandidate[]>([]);
   const [vehicles, setVehicles] = useState<Array<{ id: string; stateNumber?: string; brand?: string; model?: string }>>([]);
@@ -55,14 +55,20 @@ export default function App() {
   const [agentResult, setAgentResult] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function loadMail(folder = mailFolder) {
-    setMail(folder === 'all' ? await getUnifiedInbox() : await getMailFolder(folder));
+  async function loadMail(folder = mailFolder, source = mailSource) {
+    const params = new URLSearchParams();
+    if (folder !== 'all') params.set('smart_folder', folder);
+    if (source) params.set('source_id', source);
+    setMail(await getUnifiedInbox(params));
   }
 
   async function reloadCore() {
     const b = await bootstrap(platform);
     setBoot(b);
-    await loadMail();
+    const validSource = mailSource && b.mail.accounts.some((account) => account.source_id === mailSource)
+      ? mailSource : '';
+    if (validSource !== mailSource) setMailSource(validSource);
+    await loadMail(mailFolder, validSource);
   }
 
   async function reloadFinance() {
@@ -136,6 +142,16 @@ export default function App() {
     }
   }
 
+  async function selectMailSource(source: string) {
+    setMailSource(source);
+    try {
+      setError(null);
+      await loadMail(mailFolder, source);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Не удалось открыть выбранный ящик');
+    }
+  }
+
   async function connect(provider: 'gmail' | 'outlook') {
     try {
       setError(null);
@@ -153,7 +169,7 @@ export default function App() {
       await syncMail();
       const b = await bootstrap(platform);
       setBoot(b);
-      await loadMail();
+      await loadMail(mailFolder, mailSource);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось синхронизировать почту');
     } finally {
@@ -264,7 +280,21 @@ export default function App() {
           <section className="mail-layout">
             <div className="mail-toolbar">
               <div><h2>Единая почта</h2><p>Письма автоматически распределяются по рабочим папкам.</p></div>
-              <div className="connect-actions"><button disabled={busy} onClick={refreshMail}>{busy ? 'Синхронизация…' : 'Обновить'}</button><button onClick={() => connect('gmail')}>+ Gmail</button><button onClick={() => connect('outlook')}>+ Outlook</button></div>
+              <div className="connect-actions">
+                <label htmlFor="assigned-mail-source">Почтовый ящик</label>
+                <select id="assigned-mail-source" aria-label="Выбрать назначенный почтовый ящик"
+                  value={mailSource} onChange={(event) => void selectMailSource(event.target.value)}>
+                  <option value="">Все назначенные ящики</option>
+                  {boot?.mail.accounts.map((account) => (
+                    <option key={account.source_id} value={account.source_id}>
+                      {account.address} ({account.provider})
+                    </option>
+                  ))}
+                </select>
+                <button disabled={busy} onClick={refreshMail}>{busy ? 'Синхронизация…' : 'Обновить'}</button>
+                {isMailAdmin && <button onClick={() => connect('gmail')}>+ Gmail</button>}
+                {isMailAdmin && <button onClick={() => connect('outlook')}>+ Outlook</button>}
+              </div>
             </div>
             <div className="folder-tabs">
               {MAIL_FOLDERS.map(([id, title]) => <button key={id} className={mailFolder === id ? 'active' : ''} onClick={() => selectMailFolder(id)}>{title}{id !== 'all' && boot?.mail.folders[id] ? ` ${boot.mail.folders[id]}` : ''}</button>)}
@@ -273,7 +303,12 @@ export default function App() {
               {mail.length === 0 ? <div className="empty-state">В этой папке писем нет.</div> : mail.map((item) => (
                 <article key={item.email_id} className={`mail-row ${item.unread ? 'unread' : ''} ${item.importance === 'high' ? 'important' : ''}`} onClick={() => classifyMail(item.email_id)}>
                   <div className="mail-source">{item.importance === 'high' ? 'ВАЖНО' : item.account_id}</div>
-                  <div className="mail-content"><strong>{item.sender}</strong><span>{item.subject || '(без темы)'}</span><small>{item.attention_reason || item.classification || 'нажмите для классификации'}</small></div>
+                  <div className="mail-content"><strong>{item.sender}</strong><span>{item.subject || '(без темы)'}</span><small>{item.attention_reason || item.classification || 'Нажмите для классификации'}</small>
+                    {item.source_count && item.source_count > 1 ? (
+                      <small className="mail-copy-badge" title={(item.source_accounts || []).map((source) => source.address).join(', ')}>
+                        Одно письмо в {item.source_count} ящиках
+                      </small>
+                    ) : null}</div>
                   <time>{new Date(item.received_at).toLocaleString('ru-RU')}</time>
                 </article>
               ))}
