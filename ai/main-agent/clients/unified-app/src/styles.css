@@ -86,3 +86,20 @@ button { cursor: pointer; }
   .mail-admin-card { padding: 12px; }
   .mail-admin-preview { padding: 10px; }
 }
+
+/* One logical conversation, even when the same email reached multiple accounts. */
+.mail-copy-badge {
+  display: inline-block;
+  color: #215d89;
+  font-weight: 600;
+  margin-top: 4px;
+}
+#assigned-mail-source {
+  min-width: 150px;
+  max-width: 280px;
+  padding: 7px 9px;
+  border-radius: 8px;
+}
+@media (max-width: 620px) {
+  #assigned-mail-source { max-width: 100%; width: 100%; }
+}
