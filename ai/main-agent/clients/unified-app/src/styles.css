@@ -63,3 +63,26 @@ button { cursor: pointer; }
   .mail-row { grid-template-columns: 1fr; gap: 5px; }
   .mail-row time { text-align: left; }
 }
+
+/* Mail administration and forwarding review: responsive Mac and iPhone layout. */
+.mail-admin { display: grid; gap: 20px; max-width: 1300px; width: 100%; }
+.mail-admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px; align-items: start; }
+.mail-admin-card { border: 1px solid #d8e0e9; background: #fff; border-radius: 14px; padding: 18px; min-width: 0; }
+.mail-admin-card h3 { margin: 0 0 12px; }
+.mail-admin-card p { color: #596579; line-height: 1.45; }
+.mail-admin-card form { display: grid; gap: 12px; margin: 18px 0; }
+.mail-admin-card form label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
+.mail-admin-card form input:not([type='checkbox']), .mail-admin-card form select,
+.mail-admin-card > label select { display: block; width: 100%; padding: 9px; border: 1px solid #bbc6d4; border-radius: 7px; }
+.mail-admin-card .mail-admin-check { display: flex; align-items: center; flex-direction: row; font-weight: 400; }
+.mail-admin-card button { margin: 4px 5px 4px 0; }
+.mail-admin-item { display: grid; gap: 5px; border-top: 1px solid #e8ecf1; padding: 12px 0; }
+.mail-admin-item small { color: #566278; }
+.mail-admin-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.mail-admin-preview { margin-top: 18px; background: #f5f8fb; border: 1px solid #dbe2ec; border-radius: 10px; padding: 16px; overflow-wrap: anywhere; }
+.mail-admin-preview pre.mail-admin-body { white-space: pre-wrap; max-height: 340px; overflow: auto; font-family: inherit; }
+.mail-admin-notice { border-radius: 8px; background: #edf7ef; color: #225b31; padding: 10px; }
+@media (max-width: 620px) {
+  .mail-admin-card { padding: 12px; }
+  .mail-admin-preview { padding: 10px; }
+}
