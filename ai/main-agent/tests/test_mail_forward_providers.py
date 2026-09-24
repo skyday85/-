@@ -72,7 +72,7 @@ def test_gmail_forward_preserves_original_and_attachments(tmp_path):
     assert outgoing["To"] == "team@example.com"
     assert "Invoice" in outgoing["Subject"]
     assert any(part.get_filename() == "invoice.pdf" for part in outgoing.walk())
-    assert "invoice-file" in str(outgoing)
+    assert any(part.get_payload(decode=True) == b"invoice-file" for part in outgoing.walk())
 
 
 def test_gmail_forward_requires_explicit_send_scope(tmp_path):
