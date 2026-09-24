@@ -40,7 +40,7 @@ def test_mail_admin_http_permissions_and_scoped_inbox(tmp_path, monkeypatch):
         "owner_user_id": "boss", "provider": "gmail", "account_id": "not-linked",
         "recipient_user_id": "staff",
     })
-    assert forged_grant.status_code == 404
+    assert forged_grant.status_code == 403
 
     raw_rule = client.post("/mail/admin/rules", headers=boss, json={
         "owner_user_id": "boss", "provider": "gmail", "account_id": "not-linked",

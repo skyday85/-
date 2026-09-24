@@ -65,3 +65,50 @@ database. Provider OAuth secrets remain in the separate encrypted Mail Gateway.
 For scanned PDFs/image OCR, deploy resource-limited `tesseract` (rus+eng) and
 `pdftoppm` binaries; scanned files with missing tooling or unreadable text
 stay in manual review and are never automatically sent.
+
+## Cross-account logical message deduplication
+
+`GET /mail/inbox?source_id=...` filters by an opaque account/source identifier
+received from `/client/bootstrap`. Source IDs are compared against CURRENT
+live grants; guessed or revoked sources return 403. With no filter, only the
+mailboxes currently assigned to the authenticated user are combined.
+
+The visible inbox groups conservatively matching source copies into one
+logical message and includes `source_accounts`, `source_count`, and
+`copy_count`. Unread counts and smart-folder counts reflect logical messages
+visible to that user, rather than a sum of physical mailbox deliveries.
+The account selector can still display each original independently.
+
+The organization-scoped SQLite `org_mail_processing` ledger allows ONLY the
+first physical delivery to trigger downstream events, invoices and forwarding
+rules. Later copies receive their own classification but do not repeat
+side effects, including after a service restart. Processing failures that
+could have partially completed are parked as `needs_review` and are NOT
+automatically resent or retried.
+
+Two messages carrying DIFFERENT RFC Internet Message-IDs are never collapsed.
+Without a usable ID, strict plaintext/attachment equality, distinct source
+accounts and arrival within two minutes are all required. Short or incomplete
+messages remain independent rather than risking false deduplication.
+
+Production deployment must migrate this ledger into the organization's shared
+transactional database along with directory/grants before running multiple
+replicas. Existing source data is not deleted. Previously processed historical
+messages require explicit migration/reconciliation before any bulk replay.
+
+## Organization-scoped OAuth registration
+
+OAuth accounts must be explicitly connected within each intended organization.
+After the signed organization-specific OAuth callback completes, the API stores
+an organization/account registration and grants the administrator access to
+the newly connected mailbox. Administrator account pickers list only provider
+connections registered in the CURRENT organization. Assignment API checks
+the registration again before granting access.
+
+This is important when one externally authenticated human is a member of
+multiple organizations: global provider tokens under that user must not
+silently become available to another organization's mail administrator.
+
+Pre-existing OAuth grants without this organization registration require
+an intentional reconnect to associate the mailbox with the organization.
+The provider token remains secret in the credential-owning Mail Gateway.

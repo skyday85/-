@@ -36,6 +36,7 @@ class UnifiedMailMessage:
     recipients: List[str]
     subject: str
     received_at: str
+    internet_message_id: Optional[str] = None
     body_text: str = ""
     body_html: Optional[str] = None
     attachments: List[MailAttachment] = field(default_factory=list)
@@ -94,13 +95,26 @@ class UnifiedMailbox:
             provider_message_id = str(row["provider_message_id"])
             provider_key = (user_id, account.provider, account_id, provider_message_id)
             if provider_key in self._provider_keys:
+                # Older stored messages may predate Internet Message-ID support.
+                # Upgrade their identity when the provider returns that source
+                # copy again; never count it as a new physical email.
+                existing_id = self._provider_keys[provider_key]
+                existing = self.messages.get((user_id, existing_id))
+                new_message_id = row.get("internet_message_id")
+                if existing and new_message_id and not existing.internet_message_id:
+                    existing.internet_message_id = str(new_message_id)
+                    if self.persistence:
+                        self.persistence.put(
+                            "mail_messages", {"user_id": user_id, "email_id": existing_id},
+                            self._serialize(existing),
+                        )
                 continue
             email_id = str(row.get("email_id") or f"{account.provider}:{account_id}:{provider_message_id}")
             message_key = (user_id, email_id)
             if message_key in self.messages:
                 continue
             attachments = [MailAttachment(attachment_id=str(x["attachment_id"]), filename=str(x.get("filename", "attachment")), mime_type=str(x.get("mime_type", "application/octet-stream")), size_bytes=x.get("size_bytes"), content_ref=x.get("content_ref")) for x in row.get("attachments", [])]
-            message = UnifiedMailMessage(email_id=email_id, user_id=user_id, account_id=account_id, provider_message_id=provider_message_id, thread_id=row.get("thread_id"), sender=str(row.get("sender", "")), recipients=[str(x) for x in row.get("recipients", [])], subject=str(row.get("subject", "")), received_at=str(row["received_at"]), body_text=str(row.get("body_text", "")), body_html=row.get("body_html"), attachments=attachments, labels=[str(x) for x in row.get("labels", [])], unread=bool(row.get("unread", True)), direction=str(row.get("direction", "incoming")))
+            message = UnifiedMailMessage(email_id=email_id, user_id=user_id, account_id=account_id, provider_message_id=provider_message_id, thread_id=row.get("thread_id"), sender=str(row.get("sender", "")), recipients=[str(x) for x in row.get("recipients", [])], subject=str(row.get("subject", "")), received_at=str(row["received_at"]), internet_message_id=row.get("internet_message_id"), body_text=str(row.get("body_text", "")), body_html=row.get("body_html"), attachments=attachments, labels=[str(x) for x in row.get("labels", [])], unread=bool(row.get("unread", True)), direction=str(row.get("direction", "incoming")))
             self.messages[message_key] = message
             self._provider_keys[provider_key] = email_id
             if self.persistence:

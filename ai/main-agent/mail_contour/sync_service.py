@@ -47,7 +47,11 @@ class UnifiedMailSyncService:
         backend = self.providers.get(account.provider)
         state = self._sync_state.setdefault((user_id, account_id), MailSyncState(user_id=user_id, account_id=account_id, provider=account.provider))
         try:
-            page = backend.fetch_messages(user_id, account_id, cursor=state.cursor, limit=limit)
+            # Provider list page tokens are pagination snapshots, not change
+            # streams. Starting future syncs at an old token would miss NEW
+            # messages arriving at the top of the Gmail/Outlook inbox.
+            # Always fetch the newest page; source IDs deduplicate rereads.
+            page = backend.fetch_messages(user_id, account_id, cursor=None, limit=limit)
             imported_rows = self.mailbox.ingest(user_id, page.get("messages", []))
             imported_ids = [str(row["email_id"]) for row in imported_rows]
             state.cursor = page.get("next_cursor") or state.cursor

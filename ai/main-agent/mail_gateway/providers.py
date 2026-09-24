@@ -145,7 +145,7 @@ class GmailClient(OAuthProviderClient):
             payload = raw.get("payload") or {}
             header_map = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
             text, html, attachments = self._walk_parts(payload)
-            messages.append({"provider_message_id": raw["id"], "thread_id": raw.get("threadId"), "sender": (_addresses(header_map.get("from", "")) or [header_map.get("from", "")])[0], "recipients": _addresses(header_map.get("to", "")), "subject": header_map.get("subject", ""), "received_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(raw.get("internalDate", "0")) / 1000)), "body_text": text or raw.get("snippet", ""), "body_html": html or None, "attachments": attachments, "labels": raw.get("labelIds", []), "unread": "UNREAD" in raw.get("labelIds", []), "direction": "incoming"})
+            messages.append({"provider_message_id": raw["id"], "internet_message_id": header_map.get("message-id"), "thread_id": raw.get("threadId"), "sender": (_addresses(header_map.get("from", "")) or [header_map.get("from", "")])[0], "recipients": _addresses(header_map.get("to", "")), "subject": header_map.get("subject", ""), "received_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(raw.get("internalDate", "0")) / 1000)), "body_text": text or raw.get("snippet", ""), "body_html": html or None, "attachments": attachments, "labels": raw.get("labelIds", []), "unread": "UNREAD" in raw.get("labelIds", []), "direction": "incoming"})
         return {"messages": messages, "next_cursor": page.json().get("nextPageToken")}
 
     def fetch_attachment(self, user_id: str, account_id: str, provider_message_id: str, attachment_id: str) -> dict[str, Any]:
@@ -237,7 +237,7 @@ class OutlookClient(OAuthProviderClient):
         token = self._valid_access_token(user_id, account_id)
         headers = {"Authorization": f"Bearer {token}"}
         url = cursor or f"{GRAPH_API}/me/mailFolders/inbox/messages"
-        params = None if cursor else {"$top": min(limit, 100), "$orderby": "receivedDateTime desc", "$select": "id,conversationId,subject,from,toRecipients,receivedDateTime,body,bodyPreview,isRead,hasAttachments"}
+        params = None if cursor else {"$top": min(limit, 100), "$orderby": "receivedDateTime desc", "$select": "id,internetMessageId,conversationId,subject,from,toRecipients,receivedDateTime,body,bodyPreview,isRead,hasAttachments"}
         page = self.http.get(url, headers=headers, params=params)
         page.raise_for_status()
         messages = []
@@ -250,7 +250,7 @@ class OutlookClient(OAuthProviderClient):
             sender = ((raw.get("from") or {}).get("emailAddress") or {}).get("address", "")
             recipients = [(x.get("emailAddress") or {}).get("address", "") for x in raw.get("toRecipients", []) if (x.get("emailAddress") or {}).get("address")]
             body = raw.get("body") or {}
-            messages.append({"provider_message_id": raw["id"], "thread_id": raw.get("conversationId"), "sender": sender, "recipients": recipients, "subject": raw.get("subject", ""), "received_at": raw.get("receivedDateTime"), "body_text": body.get("content") if body.get("contentType") == "text" else raw.get("bodyPreview", ""), "body_html": body.get("content") if body.get("contentType") == "html" else None, "attachments": attachments, "labels": ["INBOX"], "unread": not bool(raw.get("isRead", False)), "direction": "incoming"})
+            messages.append({"provider_message_id": raw["id"], "internet_message_id": raw.get("internetMessageId"), "thread_id": raw.get("conversationId"), "sender": sender, "recipients": recipients, "subject": raw.get("subject", ""), "received_at": raw.get("receivedDateTime"), "body_text": body.get("content") if body.get("contentType") == "text" else raw.get("bodyPreview", ""), "body_html": body.get("content") if body.get("contentType") == "html" else None, "attachments": attachments, "labels": ["INBOX"], "unread": not bool(raw.get("isRead", False)), "direction": "incoming"})
         return {"messages": messages, "next_cursor": page.json().get("@odata.nextLink")}
 
     def fetch_attachment(self, user_id: str, account_id: str, provider_message_id: str, attachment_id: str) -> dict[str, Any]:

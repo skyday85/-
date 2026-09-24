@@ -16,6 +16,8 @@ from integrations.events import IntegrationOutbox
 from integrations.fleet_documents import FleetDocumentQueue
 from integrations.http_dispatcher import HttpIntegrationDispatcher
 from mail_contour.mail_access import MailAccessDirectory, AccessDenied
+from mail_contour.deduplication import collapse_for_view
+from mail_contour.processing_dedup import MailProcessingDeduper
 from mail_contour.text_routing import MailTextRouter
 from mail_contour.mail_collector_agent import MailCollectorAgent
 from mail_contour.persistence import MailPersistence
@@ -40,6 +42,7 @@ class MainAgentRuntime:
         db_path = os.getenv("MAIL_DATABASE_PATH", "./data/mail_contour.sqlite3")
         self.mail_persistence = MailPersistence(db_path)
         self.mail_directory = MailAccessDirectory(db_path)
+        self.mail_processing_deduper = MailProcessingDeduper(db_path)
         bootstrap_org = os.getenv("APP_ORGANIZATION_ID", "").strip()
         bootstrap_user = os.getenv("MAIL_BOOTSTRAP_OWNER_USER_ID", "").strip()
         bootstrap_email = os.getenv("MAIL_BOOTSTRAP_OWNER_EMAIL", "").strip()
@@ -108,6 +111,33 @@ class MainAgentRuntime:
         return self.mail_sync.inbox(user_id, unread_only=unread_only, smart_folder=smart_folder)
 
     def process_mail(self, user_id: str, email_id: str, *, organization_id: str | None = None):
+        if not organization_id:
+            return self._perform_mail_processing(user_id, email_id)
+        original = self.mail_collector.mailbox.get_message(user_id, email_id)
+        claim = self.mail_processing_deduper.claim(organization_id, user_id, original)
+        if not claim["claimed"]:
+            # Each physical copy retains its own classification; only business
+            # side effects (events, documents, forwarding) run once per org.
+            classified = self.mail_collector.mailbox.classify_and_route(user_id, email_id)
+            return {**classified, "duplicate_suppressed": True,
+                    "primary_source": {
+                        "owner_user_id": claim["primary_owner"],
+                        "email_id": claim["primary_email_id"],
+                    }, "primary_processing_status": claim["state"]}
+        try:
+            result = self._perform_mail_processing(user_id, email_id, organization_id=organization_id)
+        except Exception:
+            # Do not automatically retry ambiguous external sends/transfers.
+            self.mail_processing_deduper.finish(organization_id, claim["processing_key"],
+                                                success=False, error="processing_failed")
+            raise
+        else:
+            self.mail_processing_deduper.finish(organization_id, claim["processing_key"],
+                                                success=True)
+            return {**result, "duplicate_suppressed": False}
+
+    def _perform_mail_processing(self, user_id: str, email_id: str, *,
+                                 organization_id: str | None = None):
         message = self.mail_collector.process_message(user_id, email_id, organization_id=organization_id)
         integration_delivery = []
         if self.integration_dispatcher is not None:
@@ -255,24 +285,61 @@ class MainAgentRuntime:
         except (ValueError, TypeError, UnicodeError) as exc:
             raise KeyError("Invalid scoped email identifier") from exc
 
-    def visible_mailbox(self, org: str, viewer: str, *, account_ids=None, unread_only=False,
-                        classification=None, routed_to=None, search=None, smart_folder=None):
-        self.mail_directory.require_member(org, viewer)
+    @staticmethod
+    def _source_account_id(owner: str, provider: str, account_id: str) -> str:
+        encoded = json.dumps([owner, provider, account_id], separators=(",", ":"))
+        return base64.urlsafe_b64encode(encoded.encode("utf-8")).rstrip(b"=").decode("ascii")
+
+    def visible_mailbox(self, org: str, viewer: str, *, account_ids=None,
+                        source_id=None, unread_only=False, classification=None,
+                        routed_to=None, search=None, smart_folder=None):
+        # Start with ONLY active grants belonging to this organization and viewer.
+        # Never group against mailbox data the viewer cannot otherwise access.
+        grants = self.mail_directory.grants(org, viewer)
+        permitted_sources = {
+            self._source_account_id(g["owner_user_id"], g["provider"], g["account_id"])
+            for g in grants
+        }
+        if source_id is not None and source_id not in permitted_sources:
+            raise AccessDenied("This mailbox has not been assigned to you")
         rows, seen = [], set()
-        for grant in self.mail_directory.grants(org, viewer):
-            owner, account_id = grant["owner_user_id"], grant["account_id"]
-            key = (owner, grant["provider"], account_id)
-            if key in seen or (account_ids and account_id not in account_ids):
+        for grant in grants:
+            owner, account_id, provider = (
+                grant["owner_user_id"], grant["account_id"], grant["provider"]
+            )
+            current_source_id = self._source_account_id(owner, provider, account_id)
+            key = (owner, provider, account_id)
+            if key in seen or (source_id and current_source_id != source_id):
+                continue
+            if account_ids and account_id not in account_ids:
                 continue
             seen.add(key)
-            for msg in self.mail_sync.inbox(owner, account_ids=[account_id], unread_only=unread_only,
-                                            classification=classification, routed_to=routed_to,
-                                            search=search, smart_folder=smart_folder):
-                rows.append({**msg, "email_id": self._scoped_mail_id(owner, msg["email_id"]),
-                             "viewer_user_id": viewer, "source_owner_user_id": owner,
-                             "source_account_address": grant["address"]})
-        rows.sort(key=lambda item: (item.get("importance") == "high", item["received_at"]), reverse=True)
-        return rows
+            for msg in self.mail_sync.inbox(owner, account_ids=[account_id]):
+                rows.append({
+                    **msg, "email_id": self._scoped_mail_id(owner, msg["email_id"]),
+                    "viewer_user_id": viewer, "source_owner_user_id": owner,
+                    "source_account_address": grant["address"], "provider": provider,
+                    "source_id": current_source_id,
+                })
+        # Collapse first; filter on the *logical* message, not on one copy,
+        # so account badges and per-view unread counts remain consistent.
+        merged = collapse_for_view(rows)
+        selected = []
+        query = str(search or "").casefold().strip()
+        for item in merged:
+            if unread_only and not item["unread"]:
+                continue
+            if classification and classification not in item["group_classifications"]:
+                continue
+            if routed_to and routed_to not in item["group_routes"]:
+                continue
+            if smart_folder and smart_folder not in item["group_folders"]:
+                continue
+            if query and query not in item["group_search_text"]:
+                continue
+            # Internal merged search text is not a separate user-facing field.
+            selected.append({k: v for k, v in item.items() if not k.startswith("group_")})
+        return selected
 
     def visible_mail_message(self, org: str, viewer: str, scoped_email_id: str):
         owner, email_id = self._decode_scoped_mail_id(scoped_email_id)
@@ -302,11 +369,17 @@ class MainAgentRuntime:
                 connections.append({"provider": grant["provider"], "account_id": grant["account_id"],
                                     "connected": False, "reauth_required": True,
                                     "source_owner_user_id": grant["owner_user_id"]})
-        return {"accounts": grants, "connections": connections}
+        exposed_grants = [
+            {**g, "source_id": self._source_account_id(
+                g["owner_user_id"], g["provider"], g["account_id"])}
+            for g in grants
+        ]
+        return {"accounts": exposed_grants, "connections": connections}
 
     def sync_visible_mail(self, org: str, viewer: str):
         grants = self.mail_directory.grants(org, viewer)
         results, imported, failed, seen = [], [], [], set()
+        duplicates_suppressed = 0
         for grant in grants:
             owner, account_id = grant["owner_user_id"], grant["account_id"]
             if (owner, account_id) in seen:
@@ -318,13 +391,17 @@ class MainAgentRuntime:
                 results.append({"owner_user_id": owner, **result})
                 for email_id in result["imported_email_ids"]:
                     try:
-                        self.process_mail(owner, email_id, organization_id=org)
+                        processed = self.process_mail(owner, email_id, organization_id=org)
+                        if processed.get("duplicate_suppressed"):
+                            duplicates_suppressed += 1
                         imported.append(self._scoped_mail_id(owner, email_id))
                     except Exception:
                         failed.append(self._scoped_mail_id(owner, email_id))
             except Exception:
                 failed.append(f"{owner}:account_sync_failed")
         return {"accounts": results, "total_imported": len(imported),
+                "duplicates_suppressed": duplicates_suppressed,
+                "unique_processed": len(imported) - duplicates_suppressed,
                 "imported_email_ids": imported, "processing_failed_email_ids": failed}
 
     def process_mail_routing(self, org: str, owner: str, original: dict):

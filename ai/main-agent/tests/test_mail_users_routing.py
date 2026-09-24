@@ -112,3 +112,26 @@ def test_failed_ocr_creates_review_only_never_claims_auto(directory, monkeypatch
     assert data["jobs"][0]["matched_in"] == "unverified_attachment"
     assert data["recognition"][0]["status"] == "ocr_unavailable"
     assert directory.system_job(ORG, data["jobs"][0]["job_id"])["status"] == "pending_review"
+
+
+def test_oauth_connections_are_explicitly_bound_to_the_organization(directory):
+    # Even if a trusted identity belongs to two organizations and has globally
+    # owned provider tokens, another organization's admin cannot silently
+    # assign an account that was only connected in the first organization.
+    directory.create_user(OTHER, "different-boss", user_id="boss",
+                          display_name="Shared identity", email="boss+other@example.com",
+                          role="admin")
+    directory.register_oauth_connection(
+        ORG, "boss", provider="gmail", account_id="work",
+        address="office@example.com",
+    )
+    assert len(directory.connected_in_org(ORG, "boss", owner="boss")) == 1
+    assert directory.connected_in_org(OTHER, "different-boss", owner="boss") == []
+    with pytest.raises(AccessDenied):
+        directory.require_org_connection(
+            OTHER, "different-boss", owner="boss", provider="gmail", account_id="work")
+    account = directory.require_org_connection(
+        ORG, "boss", owner="boss", provider="gmail", account_id="work")
+    assert account["address"] == "office@example.com"
+    with pytest.raises(AccessDenied):
+        directory.connected_in_org(ORG, "employee", owner="boss")
