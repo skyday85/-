@@ -74,3 +74,23 @@ automatically. The default is review. Image/PDF OCR is optional on the server.
 Users with approval permission can preview the source and download original
 attachments before making a forwarding decision. Gmail forwards the intact
 source message as .eml; Outlook uses its provider-native forward operation.
+
+## Duplicate mail and assigned accounts
+
+The unified inbox displays one logical message when the same original email
+reaches several mailboxes assigned to the current user. The message shows a
+source count and a tooltip listing ONLY that user's assigned receiving
+addresses. Staff can filter by a specific assigned source or select all.
+Deactivated/revoked user-mailbox assignments disappear immediately.
+
+Duplicate detection first uses the original RFC Internet Message-ID extracted
+by Gmail and Outlook. If an account does not expose this header, the collector
+only falls back when sender, subject, substantial full plaintext, attachment
+metadata, and arrival time match conservatively across different accounts.
+Distinct RFC Message-IDs always remain separate, even if letter templates
+are identical. Ambiguous matches remain separate rather than losing mail.
+Unread state is aggregated across the visible source copies.
+
+No original provider email is deleted or moved. Each source copy retains its
+original account, provider message ID, attachments, read state and history.
+This preserves provider synchronization, authorizations and operational audit.
