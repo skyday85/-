@@ -95,3 +95,20 @@ Production deployment must migrate this ledger into the organization's shared
 transactional database along with directory/grants before running multiple
 replicas. Existing source data is not deleted. Previously processed historical
 messages require explicit migration/reconciliation before any bulk replay.
+
+## Organization-scoped OAuth registration
+
+OAuth accounts must be explicitly connected within each intended organization.
+After the signed organization-specific OAuth callback completes, the API stores
+an organization/account registration and grants the administrator access to
+the newly connected mailbox. Administrator account pickers list only provider
+connections registered in the CURRENT organization. Assignment API checks
+the registration again before granting access.
+
+This is important when one externally authenticated human is a member of
+multiple organizations: global provider tokens under that user must not
+silently become available to another organization's mail administrator.
+
+Pre-existing OAuth grants without this organization registration require
+an intentional reconnect to associate the mailbox with the organization.
+The provider token remains secret in the credential-owning Mail Gateway.
