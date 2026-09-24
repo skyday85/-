@@ -126,7 +126,28 @@ export function getFleetDocumentCandidates() {
   return request<{ items: FleetDocumentCandidate[] }>('/fleet/document-candidates').then((r) => r.items);
 }
 
-export type FleetWorkItems = {\n  vehicle_id: string;\n  repairs: Array<{ repair_id: string; title?: string; status?: string }>;\n  purchases: Array<{ purchase_id: string; title?: string; status?: string }>;\n};\n\nexport function getFleetVehicleWorkItems(vehicleId: string) {\n  return request<FleetWorkItems>(`/fleet/vehicles/${encodeURIComponent(vehicleId)}/work-items`);\n}\n\nexport async function getFleetDocumentContent(candidateId: string) {\n  const response = await fetch(`${API_BASE}/fleet/document-candidates/${encodeURIComponent(candidateId)}/content`, { credentials: 'include' });\n  if (!response.ok) throw new Error(`API ${response.status}`);\n  return response.blob();\n}\n\nexport function assignFleetDocument(candidateId: string, vehicleId: string, repairId?: string, purchaseId?: string) {\n  return request<FleetDocumentCandidate>(`/fleet/document-candidates/${encodeURIComponent(candidateId)}/assign`, {\n    method: 'POST',\n    body: JSON.stringify({ vehicle_id: vehicleId, repair_id: repairId || null, purchase_id: purchaseId || null }),\n  });\n}
+export type FleetWorkItems = {
+  vehicle_id: string;
+  repairs: Array<{ repair_id: string; title?: string; status?: string }>;
+  purchases: Array<{ purchase_id: string; title?: string; status?: string }>;
+};
+
+export function getFleetVehicleWorkItems(vehicleId: string) {
+  return request<FleetWorkItems>(`/fleet/vehicles/${encodeURIComponent(vehicleId)}/work-items`);
+}
+
+export async function getFleetDocumentContent(candidateId: string) {
+  const response = await fetch(`${API_BASE}/fleet/document-candidates/${encodeURIComponent(candidateId)}/content`, { credentials: 'include' });
+  if (!response.ok) throw new Error(`API ${response.status}`);
+  return response.blob();
+}
+
+export function assignFleetDocument(candidateId: string, vehicleId: string, repairId?: string, purchaseId?: string) {
+  return request<FleetDocumentCandidate>(`/fleet/document-candidates/${encodeURIComponent(candidateId)}/assign`, {
+    method: 'POST',
+    body: JSON.stringify({ vehicle_id: vehicleId, repair_id: repairId || null, purchase_id: purchaseId || null }),
+  });
+}
 
 export function dismissFleetDocument(candidateId: string) {
   return request<FleetDocumentCandidate>(`/fleet/document-candidates/${encodeURIComponent(candidateId)}/dismiss`, {
