@@ -52,3 +52,25 @@ npm run tauri ios dev
 3. APNs push registration и backend notification delivery.
 4. Рабочие экраны Finance/Fleet/Sales/Marketing/Procurement.
 5. Подписание macOS/iOS приложений и TestFlight/App Store pipeline.
+
+## Users and connected mailboxes
+
+An organization administrator can open **Управление почтой** in the app,
+create a user with the external authentication provider's verified user ID,
+assign specific Gmail/Outlook mailboxes and grant forwarding approval separately.
+Creating a user here does not set a password or enroll them in the authentication
+provider: the identity administrator must provision sign-in separately.
+
+A connected mailbox belongs to its original OAuth account owner; users receive
+scoped read grants rather than copied tokens. Multiple users can have access
+to one mailbox, and one user can see several assigned mailboxes in one inbox.
+Revoked/disabled accounts lose access to their mail views and forwarding queue.
+
+## Content recognition and forwarding
+
+Administrators configure per-mailbox phrases, destination email, whether to
+inspect attachments, and whether matching mail requires review or is forwarded
+automatically. The default is review. Image/PDF OCR is optional on the server.
+Users with approval permission can preview the source and download original
+attachments before making a forwarding decision. Gmail forwards the intact
+source message as .eml; Outlook uses its provider-native forward operation.
