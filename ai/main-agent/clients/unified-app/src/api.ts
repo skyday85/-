@@ -5,6 +5,17 @@ export type ModuleManifest = {
   badge_source?: string | null;
 };
 
+export type AssignedMailAccount = {
+  organization_id: string;
+  owner_user_id: string;
+  provider: 'gmail' | 'outlook';
+  account_id: string;
+  recipient_user_id: string;
+  address: string;
+  source_id: string;
+  can_forward: boolean;
+};
+
 export type BootstrapResponse = {
   client: {
     user_id: string;
@@ -20,7 +31,7 @@ export type BootstrapResponse = {
     mail_entry: string;
   };
   mail: {
-    accounts: Array<Record<string, unknown>>;
+    accounts: AssignedMailAccount[];
     connections: Array<Record<string, unknown>>;
     unread_count: number;
     important_count: number;
@@ -37,7 +48,21 @@ export type BootstrapResponse = {
   } | null;
 };
 
+export type MailSource = {
+  email_id: string;
+  owner_user_id: string;
+  provider: string;
+  account_id: string;
+  address: string;
+  unread: boolean;
+};
+
 export type MailMessage = {
+  source_id?: string;
+  source_accounts?: MailSource[];
+  source_count?: number;
+  copy_count?: number;
+  source_account_address?: string;
   email_id: string;
   user_id: string;
   account_id: string;
