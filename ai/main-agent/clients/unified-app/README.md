@@ -94,3 +94,13 @@ Unread state is aggregated across the visible source copies.
 No original provider email is deleted or moved. Each source copy retains its
 original account, provider message ID, attachments, read state and history.
 This preserves provider synchronization, authorizations and operational audit.
+
+Administrator provisioning sequence:
+1. Provision the user's verified subject in the trusted identity provider.
+2. Create the matching user record under **Управление почтой**.
+3. An administrator connects each Gmail/Outlook mailbox through the OAuth
+   flow while working in the appropriate organization.
+4. Assign that organization's registered mailboxes to the chosen staff and
+   optionally grant permission to approve forwarding.
+5. Revocation is immediate for shared inbox visibility; originals stay
+   in their provider accounts and cannot be accessed via another source ID.
