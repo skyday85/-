@@ -27,7 +27,7 @@ def test_admin_user_creation_and_cross_org_isolation(directory):
     with pytest.raises(AccessDenied):
         directory.users(ORG, "employee")
     with pytest.raises(AccessDenied):
-        directory.grants(OTHER, "different-boss", user_id="employee")
+        directory.require_member(OTHER, "employee")
     with pytest.raises(AccessDenied):
         directory.create_user(ORG, "employee", user_id="bad", display_name="bad", email="bad@example.com")
     with pytest.raises(ValueError):
