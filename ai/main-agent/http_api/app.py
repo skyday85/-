@@ -15,6 +15,8 @@ from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from app_shell.client_api import ClientContext
+from mail_contour.mail_access import AccessDenied
+from http_api.mail_admin_router import build_mail_admin_router
 from mail_contour.http_gateway import HttpOAuthMailGateway
 from runtime import build_runtime
 
@@ -69,13 +71,13 @@ class SignedOAuthState:
             raise RuntimeError("APP_OAUTH_STATE_SECRET must contain at least 32 characters")
         self.secret = secret.encode("utf-8")
 
-    def issue(self, provider: str, user_id: str, return_to: str) -> str:
-        payload = {"provider": provider, "user_id": user_id, "return_to": return_to if return_to.startswith("/") else "/mail", "iat": int(time.time()), "nonce": secrets.token_urlsafe(16)}
+    def issue(self, provider: str, user_id: str, organization_id: str, return_to: str) -> str:
+        payload = {"provider": provider, "user_id": user_id, "organization_id": organization_id, "return_to": return_to if return_to.startswith("/") else "/mail", "iat": int(time.time()), "nonce": secrets.token_urlsafe(16)}
         encoded = _b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
         signature = _b64encode(hmac.new(self.secret, encoded.encode("ascii"), hashlib.sha256).digest())
         return f"{encoded}.{signature}"
 
-    def consume(self, state: str, provider: str) -> tuple[str, str]:
+    def consume(self, state: str, provider: str) -> tuple[str, str, str]:
         try:
             encoded, signature = state.split(".", 1)
             expected = _b64encode(hmac.new(self.secret, encoded.encode("ascii"), hashlib.sha256).digest())
@@ -86,10 +88,11 @@ class SignedOAuthState:
             if age < 0 or age > self.MAX_AGE_SECONDS or payload.get("provider") != provider:
                 raise ValueError("invalid")
             user_id = str(payload.get("user_id") or "").strip()
-            if not user_id:
-                raise ValueError("user")
+            organization_id = str(payload.get("organization_id") or "").strip()
+            if not user_id or not organization_id:
+                raise ValueError("user/organization")
             return_to = str(payload.get("return_to") or "/mail")
-            return user_id, return_to if return_to.startswith("/") else "/mail"
+            return user_id, organization_id, return_to if return_to.startswith("/") else "/mail"
         except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise HTTPException(status_code=400, detail="Invalid or expired OAuth state") from exc
 
@@ -117,12 +120,18 @@ def _oauth_state_secret() -> str:
 runtime = build_runtime()
 _configure_integrations(runtime)
 oauth_states = SignedOAuthState(_oauth_state_secret())
-app = FastAPI(title="Main Agent Unified API", version="0.4.0")
+app = FastAPI(title="Main Agent Unified API", version="0.5.0")
+
+
+@app.exception_handler(AccessDenied)
+async def _denied(_request: Request, _exc: AccessDenied):
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"detail": "Forbidden"}, status_code=403)
 
 allowed_origins = [x.strip() for x in os.getenv("APP_ALLOWED_ORIGINS", "").split(",") if x.strip()]
 if os.getenv("APP_ENV", "development") == "development":
     allowed_origins.extend(["http://localhost:1420", "http://127.0.0.1:1420"])
-app.add_middleware(CORSMiddleware, allow_origins=sorted(set(allowed_origins)), allow_credentials=True, allow_methods=["GET", "POST"], allow_headers=["Content-Type", "X-Authenticated-User", "X-Organization-Id", "X-Device-Id", "X-App-Version"])
+app.add_middleware(CORSMiddleware, allow_origins=sorted(set(allowed_origins)), allow_credentials=True, allow_methods=["GET", "POST", "DELETE"], allow_headers=["Content-Type", "X-Authenticated-User", "X-Organization-Id", "X-Device-Id", "X-App-Version"])
 
 
 def _trusted_identity(request: Request) -> None:
@@ -172,7 +181,7 @@ def health() -> dict:
 
 @app.get("/client/bootstrap")
 def bootstrap(request: Request, platform: Literal["mac", "iphone"], user_id: str = Depends(authenticated_user)) -> dict:
-    return runtime.client_api.bootstrap(ClientContext(user_id=user_id, device_id=request.headers.get("X-Device-Id", "unknown-device"), platform=platform, app_version=request.headers.get("X-App-Version", "development")))
+    return runtime.client_api.bootstrap(ClientContext(user_id=user_id, device_id=request.headers.get("X-Device-Id", "unknown-device"), platform=platform, app_version=request.headers.get("X-App-Version", "development"), organization_id=organization_id))
 
 
 @app.get("/finance/transactions")
@@ -207,14 +216,14 @@ def finance_confirm(transaction_id: str, payload: ConfirmClassificationRequest, 
 
 
 @app.get("/mail/inbox")
-def inbox(account_id: list[str] = Query(default=[]), unread_only: bool = False, classification: Optional[str] = None, routed_to: Optional[str] = None, search: Optional[str] = None, smart_folder: Optional[str] = None, user_id: str = Depends(authenticated_user)):
-    return runtime.client_api.get_mailbox(user_id, account_ids=account_id, unread_only=unread_only, classification=classification, routed_to=routed_to, search=search, smart_folder=smart_folder)
+def inbox(account_id: list[str] = Query(default=[]), unread_only: bool = False, classification: Optional[str] = None, routed_to: Optional[str] = None, search: Optional[str] = None, smart_folder: Optional[str] = None, user_id: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
+    return runtime.visible_mailbox(organization_id, user_id, account_ids=account_id, unread_only=unread_only, classification=classification, routed_to=routed_to, search=search, smart_folder=smart_folder)
 
 
 @app.get("/mail/messages/{email_id}")
-def mail_message(email_id: str, user_id: str = Depends(authenticated_user)):
+def mail_message(email_id: str, user_id: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
     try:
-        return runtime.client_api.get_mail_message(user_id, email_id)
+        return runtime.visible_mail_message(organization_id, user_id, email_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Mail message not found") from exc
 
@@ -222,14 +231,14 @@ def mail_message(email_id: str, user_id: str = Depends(authenticated_user)):
 @app.post("/mail/messages/{email_id}/process")
 def process_mail(email_id: str, user_id: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
     try:
-        return runtime.client_api.process_mail_message(user_id, email_id, organization_id=organization_id)
+        return runtime.visible_process_mail(organization_id, user_id, email_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Mail message not found") from exc
 
 
 @app.post("/mail/sync")
 def sync_mail(user_id: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
-    return runtime.client_api.refresh_mail(user_id, organization_id=organization_id)
+    return runtime.sync_visible_mail(organization_id, user_id)
 
 
 @app.get("/mail/integration-events")
@@ -280,17 +289,19 @@ def dismiss_fleet_document(candidate_id: str, _user: str = Depends(authenticated
 
 
 @app.post("/mail/accounts/{provider}/authorize")
-def begin_authorization(provider: Literal["gmail", "outlook"], payload: AuthorizeRequest, request: Request, user_id: str = Depends(authenticated_user)):
+def begin_authorization(provider: Literal["gmail", "outlook"], payload: AuthorizeRequest, request: Request, user_id: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)):
+    runtime.mail_directory.require_admin(organization_id, user_id)
     if provider not in runtime.mail_providers.list_providers():
         raise HTTPException(status_code=503, detail="Mail gateway is not configured")
-    state = oauth_states.issue(provider, user_id, payload.return_to)
+    state = oauth_states.issue(provider, user_id, organization_id, payload.return_to)
     redirect_uri = f"{public_api_base(request)}/mail/oauth/{provider}/callback"
     return {"authorization_url": runtime.begin_mail_authorization(user_id=user_id, provider=provider, redirect_uri=redirect_uri, state=state)}
 
 
 @app.get("/mail/oauth/{provider}/callback")
 def oauth_callback(provider: Literal["gmail", "outlook"], request: Request, state: str, code: Optional[str] = None, error: Optional[str] = None):
-    user_id, return_to = oauth_states.consume(state, provider)
+    user_id, organization_id, return_to = oauth_states.consume(state, provider)
+    runtime.mail_directory.require_admin(organization_id, user_id)
     client_base = os.getenv("PUBLIC_CLIENT_BASE_URL", "http://localhost:1420").rstrip("/")
     if not client_base.startswith("https://") and not _is_local_origin(client_base):
         raise HTTPException(status_code=500, detail="PUBLIC_CLIENT_BASE_URL must use HTTPS")
@@ -299,7 +310,10 @@ def oauth_callback(provider: Literal["gmail", "outlook"], request: Request, stat
     if not code:
         raise HTTPException(status_code=400, detail="OAuth code is missing")
     redirect_uri = f"{public_api_base(request)}/mail/oauth/{provider}/callback"
-    runtime.complete_mail_authorization(user_id=user_id, provider=provider, code=code, redirect_uri=redirect_uri, state=state)
+    account = runtime.complete_mail_authorization(user_id=user_id, provider=provider, code=code, redirect_uri=redirect_uri, state=state)
+    runtime.mail_directory.grant_account(organization_id, user_id, owner_user_id=user_id,
+         provider=provider, account_id=account.account_id, recipient_user_id=user_id,
+         address=account.address, can_forward=True)
     return RedirectResponse(f"{client_base}{return_to}?mail_connected={provider}")
 
 
@@ -309,3 +323,5 @@ def agent_command(payload: AgentCommandRequest, _user: str = Depends(authenticat
     if not text:
         raise HTTPException(status_code=422, detail="Command text is required")
     return runtime.agent.handle(text)
+
+app.include_router(build_mail_admin_router(runtime, authenticated_user, authenticated_organization))
