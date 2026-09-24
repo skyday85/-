@@ -16,6 +16,8 @@ from integrations.events import IntegrationOutbox
 from integrations.fleet_documents import FleetDocumentQueue
 from integrations.http_dispatcher import HttpIntegrationDispatcher
 from mail_contour.mail_access import MailAccessDirectory, AccessDenied
+from mail_contour.deduplication import collapse_for_view
+from mail_contour.processing_dedup import MailProcessingDeduper
 from mail_contour.text_routing import MailTextRouter
 from mail_contour.mail_collector_agent import MailCollectorAgent
 from mail_contour.persistence import MailPersistence
@@ -40,6 +42,7 @@ class MainAgentRuntime:
         db_path = os.getenv("MAIL_DATABASE_PATH", "./data/mail_contour.sqlite3")
         self.mail_persistence = MailPersistence(db_path)
         self.mail_directory = MailAccessDirectory(db_path)
+        self.mail_processing_deduper = MailProcessingDeduper(db_path)
         bootstrap_org = os.getenv("APP_ORGANIZATION_ID", "").strip()
         bootstrap_user = os.getenv("MAIL_BOOTSTRAP_OWNER_USER_ID", "").strip()
         bootstrap_email = os.getenv("MAIL_BOOTSTRAP_OWNER_EMAIL", "").strip()
@@ -108,6 +111,33 @@ class MainAgentRuntime:
         return self.mail_sync.inbox(user_id, unread_only=unread_only, smart_folder=smart_folder)
 
     def process_mail(self, user_id: str, email_id: str, *, organization_id: str | None = None):
+        if not organization_id:
+            return self._perform_mail_processing(user_id, email_id)
+        original = self.mail_collector.mailbox.get_message(user_id, email_id)
+        claim = self.mail_processing_deduper.claim(organization_id, user_id, original)
+        if not claim["claimed"]:
+            # Each physical copy retains its own classification; only business
+            # side effects (events, documents, forwarding) run once per org.
+            classified = self.mail_collector.mailbox.classify_and_route(user_id, email_id)
+            return {**classified, "duplicate_suppressed": True,
+                    "primary_source": {
+                        "owner_user_id": claim["primary_owner"],
+                        "email_id": claim["primary_email_id"],
+                    }, "primary_processing_status": claim["state"]}
+        try:
+            result = self._perform_mail_processing(user_id, email_id, organization_id=organization_id)
+        except Exception:
+            # Do not automatically retry ambiguous external sends/transfers.
+            self.mail_processing_deduper.finish(organization_id, claim["processing_key"],
+                                                success=False, error="processing_failed")
+            raise
+        else:
+            self.mail_processing_deduper.finish(organization_id, claim["processing_key"],
+                                                success=True)
+            return {**result, "duplicate_suppressed": False}
+
+    def _perform_mail_processing(self, user_id: str, email_id: str, *,
+                                 organization_id: str | None = None):
         message = self.mail_collector.process_message(user_id, email_id, organization_id=organization_id)
         integration_delivery = []
         if self.integration_dispatcher is not None:
