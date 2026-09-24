@@ -58,8 +58,35 @@ def attachment_text(content: bytes, mime: str) -> tuple[str, str]:
             for page in list(reader.pages)[:5]:
                 result.append((page.extract_text() or "")[:15_000])
             text = "\n".join(result)[:50_000]
-            # Scanned PDFs need a separately sandboxed PDF-render/OCR worker.
-            return text, "extracted" if text.strip() else "scanned_pdf_needs_review"
+            if text.strip():
+                return text, "extracted"
+            if not shutil.which("pdftoppm") or not shutil.which("tesseract"):
+                return "", "scanned_pdf_needs_review"
+            # Optional local development fallback; production should isolate the
+            # PDF renderer and OCR executable in a resource-limited worker.
+            with tempfile.TemporaryDirectory(prefix="mail-pdf-ocr-") as directory:
+                source = Path(directory) / "source.pdf"
+                source.write_bytes(content)
+                render = subprocess.run(
+                    [shutil.which("pdftoppm"), "-f", "1", "-l", "2", "-r", "100",
+                     "-gray", "-png", str(source), str(Path(directory) / "page")],
+                    capture_output=True, timeout=15, check=False
+                )
+                if render.returncode:
+                    return "", "pdf_ocr_render_failed"
+                words = []
+                for image in sorted(Path(directory).glob("page-*.png"))[:2]:
+                    if image.stat().st_size > 8 * 1024 * 1024:
+                        return "", "pdf_ocr_page_too_large"
+                    recognized = subprocess.run(
+                        [shutil.which("tesseract"), str(image), "stdout", "-l", "rus+eng"],
+                        capture_output=True, timeout=12, check=False
+                    )
+                    if recognized.returncode:
+                        return "", "pdf_ocr_failed"
+                    words.append(recognized.stdout.decode("utf-8", errors="replace")[:25_000])
+                result = "\n".join(words)[:50_000]
+                return result, "recognized" if result.strip() else "scanned_pdf_needs_review"
         except Exception:
             return "", "pdf_parse_failed"
     if mime in {"image/png", "image/jpeg", "image/webp"}:
