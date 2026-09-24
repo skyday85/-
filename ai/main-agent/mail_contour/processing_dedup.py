@@ -104,7 +104,7 @@ class MailProcessingDeduper:
                     "state": existing["state"],
                 }
 
-            processing_key = mid or ("fallback:" + _key([sig, timestamp, owner_user_id, source_account])
+            processing_key = mid or ("fallback:" + _key([sig, timestamp, owner_user_id, source_account, source_email_id])
                                       if sig else "source:" +
                                       _key([owner_user_id, source_account, source_email_id]))
             db.execute("""INSERT INTO org_mail_processing
