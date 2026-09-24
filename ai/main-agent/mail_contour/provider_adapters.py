@@ -52,7 +52,7 @@ class OAuthMailProviderAdapter:
 
     def _normalize_message(self, user_id: str, account_id: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         provider_message_id = str(raw["provider_message_id"])
-        return {"email_id": str(raw.get("email_id") or f"{self.provider}:{account_id}:{provider_message_id}"), "user_id": user_id, "account_id": account_id, "provider_message_id": provider_message_id, "thread_id": raw.get("thread_id"), "sender": str(raw.get("sender", "")), "recipients": [str(x) for x in raw.get("recipients", [])], "subject": str(raw.get("subject", "")), "received_at": str(raw["received_at"]), "body_text": str(raw.get("body_text", "")), "body_html": raw.get("body_html"), "attachments": list(raw.get("attachments", [])), "labels": [str(x) for x in raw.get("labels", [])], "unread": bool(raw.get("unread", True)), "direction": str(raw.get("direction", "incoming"))}
+        return {"email_id": str(raw.get("email_id") or f"{self.provider}:{account_id}:{provider_message_id}"), "user_id": user_id, "account_id": account_id, "provider_message_id": provider_message_id, "internet_message_id": raw.get("internet_message_id"), "thread_id": raw.get("thread_id"), "sender": str(raw.get("sender", "")), "recipients": [str(x) for x in raw.get("recipients", [])], "subject": str(raw.get("subject", "")), "received_at": str(raw["received_at"]), "body_text": str(raw.get("body_text", "")), "body_html": raw.get("body_html"), "attachments": list(raw.get("attachments", [])), "labels": [str(x) for x in raw.get("labels", [])], "unread": bool(raw.get("unread", True)), "direction": str(raw.get("direction", "incoming"))}
 
 
 class GmailProviderAdapter(OAuthMailProviderAdapter):
