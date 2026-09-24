@@ -13,6 +13,7 @@ class OAuthMailGateway(Protocol):
     def complete_authorization(self, provider: str, *, user_id: str, code: str, redirect_uri: str, state: str, scopes: tuple[str, ...]) -> Dict[str, Any]: ...
     def fetch_messages(self, provider: str, user_id: str, account_id: str, *, cursor: Optional[str], limit: int) -> Dict[str, Any]: ...
     def fetch_attachment(self, provider: str, user_id: str, account_id: str, provider_message_id: str, attachment_id: str) -> Dict[str, Any]: ...
+    def forward_message(self, provider: str, user_id: str, account_id: str, provider_message_id: str, destination: str) -> Dict[str, Any]: ...
 
 
 @dataclass
@@ -43,6 +44,9 @@ class OAuthMailProviderAdapter:
     def fetch_attachment(self, user_id: str, account_id: str, provider_message_id: str, attachment_id: str) -> Dict[str, Any]:
         return self.gateway.fetch_attachment(self.provider, user_id, account_id, provider_message_id, attachment_id)
 
+    def forward_message(self, user_id: str, account_id: str, provider_message_id: str, destination: str) -> Dict[str, Any]:
+        return self.gateway.forward_message(self.provider, user_id, account_id, provider_message_id, destination)
+
     def _account(self, raw: Dict[str, Any], user_id: str) -> MailProviderAccount:
         return MailProviderAccount(account_id=str(raw["account_id"]), address=str(raw["address"]), provider=self.provider, owner_user_id=user_id, display_name=raw.get("display_name"), auth_mode="oauth")
 
@@ -53,9 +57,9 @@ class OAuthMailProviderAdapter:
 
 class GmailProviderAdapter(OAuthMailProviderAdapter):
     def __init__(self, gateway: OAuthMailGateway) -> None:
-        super().__init__(gateway=gateway, provider="gmail", scopes=("openid", "email", "https://www.googleapis.com/auth/gmail.readonly"))
+        super().__init__(gateway=gateway, provider="gmail", scopes=("openid", "email", "https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"))
 
 
 class OutlookProviderAdapter(OAuthMailProviderAdapter):
     def __init__(self, gateway: OAuthMailGateway) -> None:
-        super().__init__(gateway=gateway, provider="outlook", scopes=("openid", "email", "offline_access", "Mail.Read"))
+        super().__init__(gateway=gateway, provider="outlook", scopes=("openid", "email", "offline_access", "Mail.Read", "Mail.Send"))
