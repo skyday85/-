@@ -68,8 +68,12 @@ def build_mail_admin_router(runtime, authenticated_user, authenticated_organizat
     def connected_accounts(owner_user_id: str, actor: str = Depends(authenticated_user),
                            org: str = Depends(authenticated_organization)):
         runtime.mail_directory.require_admin(org, actor)
-        runtime.mail_directory.require_member(org, owner_user_id)
-        return {"items": runtime.refresh_mail_accounts(owner_user_id)}
+        authorized = {
+            (item["provider"], item["account_id"])
+            for item in runtime.mail_directory.connected_in_org(org, actor, owner=owner_user_id)
+        }
+        connected = runtime.refresh_mail_accounts(owner_user_id)
+        return {"items": [a for a in connected if (a["provider"], a["account_id"]) in authorized]}
 
     @router.get("/admin/grants")
     def all_grants(actor: str = Depends(authenticated_user), org: str = Depends(authenticated_organization)):
@@ -79,7 +83,10 @@ def build_mail_admin_router(runtime, authenticated_user, authenticated_organizat
     def grant_account(payload: AccountGrant, actor: str = Depends(authenticated_user),
                       org: str = Depends(authenticated_organization)):
         runtime.mail_directory.require_admin(org, actor)
-        runtime.mail_directory.require_member(org, payload.owner_user_id)
+        runtime.mail_directory.require_org_connection(
+            org, actor, owner=payload.owner_user_id, provider=payload.provider,
+            account_id=payload.account_id
+        )
         connected = runtime.refresh_mail_accounts(payload.owner_user_id)
         matching = [account for account in connected if
                     account["account_id"] == payload.account_id and account["provider"] == payload.provider]
