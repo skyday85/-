@@ -3,7 +3,7 @@ import {
   approveMailForward, assignMailAccount, createMailRoutingRule, createOrgMailUser,
   dismissMailForward, downloadForwardAttachment, getAllMailGrants, getConnectedAccounts,
   getForwardingJobs, getForwardPreview, getMailRoutingRules, getOrgMailUsers,
-  revokeMailAccount, setOrgMailUserStatus,
+  revokeMailAccount, setOrgMailUserStatus, setMailRoutingRuleStatus,
   type ConnectedAccount, type ForwardJob, type ForwardPreview, type ForwardingRule,
   type MailGrant, type MailOrgUser,
 } from './mail-admin-api';
@@ -298,6 +298,12 @@ export function MailManagement({ currentUserId }: { currentUserId: string }) {
               <strong>{rule.match_text} → {rule.destination}</strong>
               <small>{rule.provider} · {rule.mode === 'auto' ? 'Автоматически' : 'С подтверждением'} ·
                 {rule.enabled ? ' включено' : ' отключено'}</small>
+              <button type="button" disabled={busy} onClick={() =>
+                void submit({ preventDefault() {} } as FormEvent,
+                  () => setMailRoutingRuleStatus(rule.rule_id, !rule.enabled),
+                  'Правило обновлено')}>
+                {rule.enabled ? 'Отключить правило' : 'Включить правило'}
+              </button>
             </div>
           ))}
         </section>
