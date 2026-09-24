@@ -219,6 +219,10 @@ class MailAccessDirectory:
                     account_id: str, match_text: str, destination: str,
                     scan_attachments: bool = False, mode: str = "review") -> dict:
         self.require_admin(org, actor)
+        self.require_member(org, owner)
+        if mode == "auto":
+            self.assert_grant(org, actor, owner=owner, provider=provider,
+                              account_id=account_id, forwarding=True)
         if mode not in {"review", "auto"}:
             raise ValueError("Unknown approval mode")
         term = match_text.strip().casefold()
