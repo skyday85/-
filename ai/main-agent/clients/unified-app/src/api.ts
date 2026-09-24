@@ -27,6 +27,14 @@ export type BootstrapResponse = {
     folders: Record<string, number>;
   };
   agents: Array<Record<string, unknown>>;
+  mail_identity?: {
+    organization_id: string;
+    user_id: string;
+    email: string;
+    display_name: string;
+    role: 'owner' | 'admin' | 'member';
+    active: boolean;
+  } | null;
 };
 
 export type MailMessage = {
@@ -75,9 +83,9 @@ export type BankTransaction = {
   classification?: BankClassification | null;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://api.example.invalid';
+export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://api.example.invalid';
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: 'include',
