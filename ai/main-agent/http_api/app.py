@@ -180,7 +180,7 @@ def health() -> dict:
 
 
 @app.get("/client/bootstrap")
-def bootstrap(request: Request, platform: Literal["mac", "iphone"], user_id: str = Depends(authenticated_user)) -> dict:
+def bootstrap(request: Request, platform: Literal["mac", "iphone"], user_id: str = Depends(authenticated_user), organization_id: str = Depends(authenticated_organization)) -> dict:
     return runtime.client_api.bootstrap(ClientContext(user_id=user_id, device_id=request.headers.get("X-Device-Id", "unknown-device"), platform=platform, app_version=request.headers.get("X-App-Version", "development"), organization_id=organization_id))
 
 
