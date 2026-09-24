@@ -10,6 +10,7 @@ class ClientContext:
     device_id: str
     platform: str
     app_version: str
+    organization_id: Optional[str] = None
 
 
 class UnifiedClientApi:
@@ -17,8 +18,12 @@ class UnifiedClientApi:
         self.runtime = runtime
 
     def bootstrap(self, context: ClientContext) -> Dict[str, Any]:
-        mail_state = self.runtime.mail_connection_state(context.user_id)
-        inbox = self.runtime.mail_sync.inbox(context.user_id)
+        if context.organization_id:
+            mail_state = self.runtime.visible_mail_state(context.organization_id, context.user_id)
+            inbox = self.runtime.visible_mailbox(context.organization_id, context.user_id)
+        else:
+            mail_state = self.runtime.mail_connection_state(context.user_id)
+            inbox = self.runtime.mail_sync.inbox(context.user_id)
         folders = {}
         for row in inbox:
             folders[row.get("smart_folder", "other")] = folders.get(row.get("smart_folder", "other"), 0) + 1
@@ -28,11 +33,13 @@ class UnifiedClientApi:
             "mail": {
                 "accounts": mail_state["accounts"],
                 "connections": mail_state["connections"],
-                "unread_count": len(self.runtime.mail_sync.inbox(context.user_id, unread_only=True)),
+                "unread_count": len([row for row in inbox if row.get("unread")]),
                 "important_count": len([x for x in inbox if x.get("importance") == "high"]),
                 "folders": folders,
             },
             "agents": self.runtime.list_specialized_agents(),
+            "mail_identity": self.runtime.mail_directory.require_member(
+                context.organization_id, context.user_id) if context.organization_id else None,
         }
 
     def get_mailbox(self, user_id: str, *, account_ids: Optional[Iterable[str]] = None, unread_only: bool = False, classification: Optional[str] = None, routed_to: Optional[str] = None, search: Optional[str] = None, smart_folder: Optional[str] = None) -> List[Dict[str, Any]]:
