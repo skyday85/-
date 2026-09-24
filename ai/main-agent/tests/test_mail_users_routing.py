@@ -17,6 +17,8 @@ def directory(tmp_path: Path):
     store.create_user(ORG, "boss", user_id="employee", email="staff@example.com", display_name="Employee")
     store.create_user(ORG, "boss", user_id="unassigned", email="outsider@example.com", display_name="Outsider")
     store.grant_account(ORG, "boss", owner_user_id="boss", provider="gmail", account_id="work",
+                        recipient_user_id="boss", address="office@example.com", can_forward=True)
+    store.grant_account(ORG, "boss", owner_user_id="boss", provider="gmail", account_id="work",
                         recipient_user_id="employee", address="office@example.com", can_forward=True)
     return store
 
