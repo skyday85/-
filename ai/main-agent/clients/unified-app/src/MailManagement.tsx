@@ -3,7 +3,7 @@ import {
   approveMailForward, assignMailAccount, createMailRoutingRule, createOrgMailUser,
   dismissMailForward, downloadForwardAttachment, getAllMailGrants, getConnectedAccounts,
   getForwardingJobs, getForwardPreview, getMailRoutingRules, getOrgMailUsers,
-  revokeMailAccount, setOrgMailUserStatus, setMailRoutingRuleStatus,
+  revokeMailAccount, setOrgMailUserStatus, setMailRoutingRuleStatus, uploadMailArchive,
   type ConnectedAccount, type ForwardJob, type ForwardPreview, type ForwardingRule,
   type MailGrant, type MailOrgUser,
 } from './mail-admin-api';
@@ -117,6 +117,9 @@ export function MailManagement({ currentUserId }: { currentUserId: string }) {
   const [sourceAccount, setSourceAccount] = useState('');
   const [targetUser, setTargetUser] = useState('');
   const [canForward, setCanForward] = useState(false);
+  const [archiveAddress, setArchiveAddress] = useState('');
+  const [archiveFile, setArchiveFile] = useState<File | null>(null);
+  const [archiveResult, setArchiveResult] = useState('');
   const [newUser, setNewUser] = useState({
     user_id: '', display_name: '', email: '', role: 'member' as 'member' | 'admin',
   });
@@ -172,6 +175,38 @@ export function MailManagement({ currentUserId }: { currentUserId: string }) {
          только к выбранным почтовым ящикам. Учётная запись и пароль почты не передаются сотрудникам.</p>
       {error && <p role="alert" className="error">{error}</p>}
       {notice && <p role="status" className="mail-admin-notice">{notice}</p>}
+      <section className="mail-admin-card mail-import-card">
+        <h3>Загрузить письма в единую почту</h3>
+        <p>Первый этап: безопасный импорт архивов из Mail.ru, Яндекса и Timeweb.
+           Выгрузите письма из почтового клиента в .eml или .mbox и загрузите сюда.
+           Письма будут сгруппированы по содержимому, а оригиналы останутся на серверах.
+           Пароли приложений здесь не нужны.</p>
+        <form onSubmit={(event) => void submit(event, async () => {
+          if (!archiveFile) throw new Error('Выберите архив писем');
+          const result = await uploadMailArchive(archiveAddress, archiveFile);
+          setArchiveResult(
+            `Получено: ${result.received}; добавлено: ${result.imported}; ранее загружено: ${result.already_present}`,
+          );
+          setArchiveFile(null);
+          if (sourceOwner === currentUserId) {
+            setAccounts(await getConnectedAccounts(currentUserId));
+          }
+        }, 'Письма загружены; пересылка и отправка отключены')}>
+          <label>Адрес исходного почтового ящика
+            <input type="email" required value={archiveAddress}
+              onChange={(event) => setArchiveAddress(event.target.value)}
+              placeholder="zakaz-pmtk@yandex.ru" autoComplete="off" />
+          </label>
+          <label>Экспортированные письма (.eml или .mbox, до 45 МБ)
+            <input type="file" required accept=".eml,.mbox" key={archiveFile ? archiveFile.name : 'cleared'}
+              onChange={(event) => setArchiveFile(event.target.files?.[0] || null)} />
+          </label>
+          <button type="submit" disabled={busy || !archiveAddress || !archiveFile}>Загрузить и разобрать</button>
+        </form>
+        {archiveResult && <p role="status" className="mail-admin-notice">{archiveResult}</p>}
+        <small>Автоматическое подключение к IMAP будет добавлено отдельно.
+          Загрузка архива не выдаёт право удалять или отправлять письма.</small>
+      </section>
       <div className="mail-admin-grid">
         <section className="mail-admin-card">
           <h3>Пользователи</h3>
@@ -210,7 +245,7 @@ export function MailManagement({ currentUserId }: { currentUserId: string }) {
         </section>
         <section className="mail-admin-card">
           <h3>Назначение почтовых ящиков</h3>
-          <p>Сначала подключите почту через Gmail или Outlook в разделе «Почта».
+          <p>Подключите Gmail/Outlook через OAuth или загрузите архив .eml/.mbox выше.
              Затем назначьте этот ящик конкретному сотруднику.</p>
           <label>Владелец подключения
             <select value={sourceOwner} onChange={(event) => setSourceOwner(event.target.value)}>
@@ -227,6 +262,8 @@ export function MailManagement({ currentUserId }: { currentUserId: string }) {
           </label>
           <form onSubmit={(event) => void submit(event, async () => {
             if (!account || !targetUser) throw new Error('Укажите почту и пользователя');
+            if (account.provider === 'archive' && canForward)
+              throw new Error('Импортированные архивы доступны только для чтения');
             await assignMailAccount({ owner_user_id: sourceOwner,
               provider: account.provider, account_id: account.account_id,
               recipient_user_id: targetUser, can_forward: canForward });
@@ -240,7 +277,7 @@ export function MailManagement({ currentUserId }: { currentUserId: string }) {
             </label>
             <label className="mail-admin-check">
               <input type="checkbox" checked={canForward} onChange={(event) => setCanForward(event.target.checked)} />
-              Разрешить подтверждать пересылку из этого ящика
+              Разрешить подтверждать пересылку из этого ящика (не для архивов)
             </label>
             <button disabled={busy || !account || !targetUser}>Назначить ящик</button>
           </form>
@@ -264,6 +301,8 @@ export function MailManagement({ currentUserId }: { currentUserId: string }) {
              режима требуется явное разрешение; нераспознанные вложения всегда проверяются человеком.</p>
           <form onSubmit={(event) => void submit(event, async () => {
             if (!account) throw new Error('Выберите почтовый ящик');
+            if (account.provider === 'archive')
+              throw new Error('Пересылка из импортированного архива отключена');
             if (newRule.mode === 'auto' && !window.confirm(
               `Включить автоматическую пересылку с ${account.address} на ${newRule.destination}?`,
             )) return;
@@ -291,7 +330,7 @@ export function MailManagement({ currentUserId }: { currentUserId: string }) {
                 <option value="auto">Автоматически</option>
               </select>
             </label>
-            <button disabled={busy || !account}>Сохранить правило</button>
+            <button disabled={busy || !account || account.provider === 'archive'}>Сохранить правило</button>
           </form>
           {rules.map((rule) => (
             <div key={rule.rule_id} className="mail-admin-item">
