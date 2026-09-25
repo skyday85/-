@@ -108,7 +108,9 @@ export function ForwardReview({ grants }: { grants: MailGrant[] }) {
   );
 }
 
-export function MailManagement({ currentUserId }: { currentUserId: string }) {
+export function MailManagement({ currentUserId, onImport }: {
+  currentUserId: string; onImport?: () => void;
+}) {
   const [users, setUsers] = useState<MailOrgUser[]>([]);
   const [grants, setGrants] = useState<MailGrant[]>([]);
   const [rules, setRules] = useState<ForwardingRule[]>([]);
@@ -188,6 +190,7 @@ export function MailManagement({ currentUserId }: { currentUserId: string }) {
             `Получено: ${result.received}; добавлено: ${result.imported}; ранее загружено: ${result.already_present}`,
           );
           setArchiveFile(null);
+          onImport?.();
           if (sourceOwner === currentUserId) {
             setAccounts(await getConnectedAccounts(currentUserId));
           }
