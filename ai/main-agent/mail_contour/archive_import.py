@@ -95,6 +95,19 @@ def parse_file(filename: str, content: bytes):
             received_at = stamp.astimezone(timezone.utc).isoformat()
         except (TypeError, ValueError, OverflowError):
             received_at = datetime.now(timezone.utc).isoformat()
+        # A plain .eml has no reliable read-status metadata. Avoid producing
+        # fake unread alerts from old archive exports.
+        mozilla = str(item.get("X-Mozilla-Status") or "").strip()
+        status = str(item.get("Status") or "")
+        if mozilla:
+            try:
+                unread = not bool(int(mozilla, 16) & 0x0001)
+            except ValueError:
+                unread = False
+        elif status:
+            unread = "R" not in status
+        else:
+            unread = False
         imported.append({
             "provider_message_id": "import:" + fingerprint,
             "internet_message_id": str(item.get("Message-ID") or "") or None,
@@ -107,5 +120,6 @@ def parse_file(filename: str, content: bytes):
             "body_text": body_text,
             "body_html": body_html or None,
             "attachments": attachments,
+            "unread": unread,
         })
     return imported
