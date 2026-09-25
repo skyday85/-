@@ -120,7 +120,7 @@ export function MailManagement({ currentUserId, onImport }: {
   const [targetUser, setTargetUser] = useState('');
   const [canForward, setCanForward] = useState(false);
   const [archiveAddress, setArchiveAddress] = useState('');
-  const [archiveFile, setArchiveFile] = useState<File | null>(null);
+  const [archiveFiles, setArchiveFiles] = useState<File[]>([]);
   const [archiveResult, setArchiveResult] = useState('');
   const [newUser, setNewUser] = useState({
     user_id: '', display_name: '', email: '', role: 'member' as 'member' | 'admin',
@@ -184,12 +184,19 @@ export function MailManagement({ currentUserId, onImport }: {
            Письма будут сгруппированы по содержимому, а оригиналы останутся на серверах.
            Пароли приложений здесь не нужны.</p>
         <form onSubmit={(event) => void submit(event, async () => {
-          if (!archiveFile) throw new Error('Выберите архив писем');
-          const result = await uploadMailArchive(archiveAddress, archiveFile);
+          if (!archiveFiles.length) throw new Error('Выберите файлы писем');
+          let received = 0, imported = 0, alreadyPresent = 0;
+          for (let index = 0; index < archiveFiles.length; index++) {
+            setArchiveResult(`Загрузка файла ${index + 1} из ${archiveFiles.length}: ${archiveFiles[index].name}`);
+            const result = await uploadMailArchive(archiveAddress, archiveFiles[index]);
+            received += result.received;
+            imported += result.imported;
+            alreadyPresent += result.already_present;
+          }
           setArchiveResult(
-            `Получено: ${result.received}; добавлено: ${result.imported}; ранее загружено: ${result.already_present}`,
+            `Получено: ${received}; добавлено: ${imported}; ранее загружено: ${alreadyPresent}`,
           );
-          setArchiveFile(null);
+          setArchiveFiles([]);
           onImport?.();
           if (sourceOwner === currentUserId) {
             setAccounts(await getConnectedAccounts(currentUserId));
@@ -200,11 +207,11 @@ export function MailManagement({ currentUserId, onImport }: {
               onChange={(event) => setArchiveAddress(event.target.value)}
               placeholder="zakaz-pmtk@yandex.ru" autoComplete="off" />
           </label>
-          <label>Экспортированные письма (.eml или .mbox, до 45 МБ)
-            <input type="file" required accept=".eml,.mbox" key={archiveFile ? archiveFile.name : 'cleared'}
-              onChange={(event) => setArchiveFile(event.target.files?.[0] || null)} />
+          <label>Экспортированные письма (.eml или .mbox, до 45 МБ на файл; можно несколько)
+            <input type="file" required multiple accept=".eml,.mbox" key={archiveFiles.length ? archiveFiles.map((f) => f.name).join(":") : "cleared"}
+              onChange={(event) => setArchiveFiles(Array.from(event.target.files || []))} />
           </label>
-          <button type="submit" disabled={busy || !archiveAddress || !archiveFile}>Загрузить и разобрать</button>
+          <button type="submit" disabled={busy || !archiveAddress || archiveFiles.length === 0}>Загрузить и разобрать</button>
         </form>
         {archiveResult && <p role="status" className="mail-admin-notice">{archiveResult}</p>}
         <small>Автоматическое подключение к IMAP будет добавлено отдельно.
