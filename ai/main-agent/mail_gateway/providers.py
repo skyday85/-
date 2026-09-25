@@ -5,6 +5,10 @@ import os
 import time
 from dataclasses import replace
 from email.utils import getaddresses
+from email import message_from_bytes
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.message import MIMEMessage
 from typing import Any, Optional
 from urllib.parse import urlencode
 
@@ -54,6 +58,9 @@ class OAuthProviderClient:
         raise NotImplementedError
 
     def fetch_attachment(self, user_id: str, account_id: str, provider_message_id: str, attachment_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def forward_message(self, user_id: str, account_id: str, provider_message_id: str, destination: str) -> dict[str, Any]:
         raise NotImplementedError
 
     def _valid_access_token(self, user_id: str, account_id: str) -> str:
@@ -147,6 +154,37 @@ class GmailClient(OAuthProviderClient):
         response.raise_for_status()
         return {"attachment_id": attachment_id, "content_base64url": response.json().get("data", "")}
 
+    def forward_message(self, user_id: str, account_id: str, provider_message_id: str, destination: str) -> dict[str, Any]:
+        record = self.store.get(user_id, self.provider, account_id)
+        if "https://www.googleapis.com/auth/gmail.send" not in record.scopes:
+            raise PermissionError("Reconnect Gmail and grant gmail.send before forwarding")
+        token = self._valid_access_token(user_id, account_id)
+        headers = {"Authorization": f"Bearer {token}"}
+        original_response = self.http.get(
+            f"{GMAIL_API}/users/me/messages/{provider_message_id}",
+            headers=headers, params={"format": "raw"}
+        )
+        original_response.raise_for_status()
+        encoded_original = original_response.json()["raw"]
+        original = message_from_bytes(base64.urlsafe_b64decode(
+            encoded_original + "=" * (-len(encoded_original) % 4)
+        ))
+        outgoing = MIMEMultipart()
+        outgoing["From"] = record.address
+        outgoing["To"] = destination
+        outgoing["Subject"] = "Fwd: " + str(original.get("Subject") or "")
+        outgoing.attach(MIMEText(
+            "Пересланное письмо с исходными вложениями находится во вложении .eml.",
+            "plain", "utf-8"
+        ))
+        outgoing.attach(MIMEMessage(original))
+        sent = self.http.post(
+            f"{GMAIL_API}/users/me/messages/send", headers=headers,
+            json={"raw": base64.urlsafe_b64encode(outgoing.as_bytes()).decode("ascii")}
+        )
+        sent.raise_for_status()
+        return {"status": "accepted", "provider_message_id": sent.json().get("id")}
+
 
 class OutlookClient(OAuthProviderClient):
     provider = "outlook"
@@ -221,3 +259,17 @@ class OutlookClient(OAuthProviderClient):
         response.raise_for_status()
         raw = response.json()
         return {"attachment_id": attachment_id, "filename": raw.get("name"), "mime_type": raw.get("contentType"), "content_base64": raw.get("contentBytes")}
+
+    def forward_message(self, user_id: str, account_id: str, provider_message_id: str, destination: str) -> dict[str, Any]:
+        record = self.store.get(user_id, self.provider, account_id)
+        if "Mail.Send" not in record.scopes:
+            raise PermissionError("Reconnect Outlook and grant Mail.Send before forwarding")
+        token = self._valid_access_token(user_id, account_id)
+        response = self.http.post(
+            f"{GRAPH_API}/me/messages/{provider_message_id}/forward",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"comment": "Переслано через почтовый сервис.",
+                  "toRecipients": [{"emailAddress": {"address": destination}}]}
+        )
+        response.raise_for_status()
+        return {"status": "accepted", "provider_message_id": provider_message_id}

@@ -22,6 +22,8 @@ import {
   type FleetDocumentCandidate,
   type FleetWorkItems,
 } from './api';
+import { ForwardReview, MailManagement } from './MailManagement';
+import type { MailGrant } from './mail-admin-api';
 
 const MAIL_FOLDERS = [
   ['all', 'Все'],
@@ -207,7 +209,7 @@ export default function App() {
     }
   }
 
-  const nav = boot?.manifest.navigation ?? [
+  const baseNav = boot?.manifest.navigation ?? [
     { module_id: 'main_agent', title: 'Главный агент', routes: ['/agent'] },
     { module_id: 'mail', title: 'Почта', routes: ['/mail'] },
     { module_id: 'finance', title: 'Финансы', routes: ['/finance'] },
@@ -217,6 +219,10 @@ export default function App() {
     { module_id: 'procurement', title: 'Закупки', routes: ['/procurement'] },
     { module_id: 'tasks', title: 'Задачи', routes: ['/tasks'] },
   ];
+  const isMailAdmin = boot?.mail_identity?.role === 'owner' || boot?.mail_identity?.role === 'admin';
+  const nav = isMailAdmin
+    ? [...baseNav, { module_id: 'mail_settings', title: 'Управление почтой', routes: ['/mail/admin'] }]
+    : baseNav;
 
   return (
     <div className="app-shell">
@@ -272,7 +278,12 @@ export default function App() {
                 </article>
               ))}
             </div>
+            <ForwardReview grants={(boot?.mail.accounts ?? []) as MailGrant[]} />
           </section>
+        )}
+
+        {active === 'mail_settings' && isMailAdmin && boot?.mail_identity && (
+          <MailManagement currentUserId={boot.mail_identity.user_id} />
         )}
 
         {active === 'procurement' && (
@@ -318,7 +329,7 @@ export default function App() {
           </div></section>
         )}
 
-        {!['main_agent', 'mail', 'finance', 'procurement'].includes(active) && <section className="placeholder"><h2>{nav.find((x) => x.module_id === active)?.title}</h2><p>Модуль подключён к общей навигации.</p></section>}
+        {!['main_agent', 'mail', 'mail_settings', 'finance', 'procurement'].includes(active) && <section className="placeholder"><h2>{nav.find((x) => x.module_id === active)?.title}</h2><p>Модуль подключён к общей навигации.</p></section>}
       </main>
     </div>
   );

@@ -62,3 +62,11 @@ class HttpOAuthMailGateway:
 
     def fetch_attachment(self, provider: str, user_id: str, account_id: str, provider_message_id: str, attachment_id: str) -> Dict[str, Any]:
         return self._request("GET", f"/v1/providers/{provider}/accounts/{quote(account_id, safe='')}/messages/{quote(provider_message_id, safe='')}/attachments/{quote(attachment_id, safe='')}", user_id=user_id)
+
+    def forward_message(self, provider: str, user_id: str, account_id: str, provider_message_id: str, destination: str) -> Dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/v1/providers/{provider}/accounts/{quote(account_id, safe='')}/messages/{quote(provider_message_id, safe='')}/forward",
+            user_id=user_id,
+            payload={"destination": destination}
+        )
