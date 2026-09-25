@@ -49,9 +49,11 @@ def parse_file(filename: str, content: bytes):
                 handle.write(content)
             box = mailbox.mbox(name, create=False)
             try:
-                originals = [parser.parsebytes(item.as_bytes())
-                             for index, item in enumerate(box)
-                             if index < MAX_MESSAGES]
+                originals = []
+                for index, item in enumerate(box):
+                    if index >= MAX_MESSAGES:
+                        raise ValueError("Archive has more than 1000 messages; split the export")
+                    originals.append(parser.parsebytes(item.as_bytes()))
             finally:
                 box.close()
     imported = []
