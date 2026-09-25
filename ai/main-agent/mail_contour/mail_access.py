@@ -214,6 +214,8 @@ class MailAccessDirectory:
         self.require_member(org, recipient_user_id)
         if provider.lower() not in {"gmail", "outlook", "archive"} or not account_id.strip():
             raise ValueError("Invalid mail account")
+        if provider.lower() == "archive" and can_forward:
+            raise ValueError("Imported mail does not support forwarding")
         with self._lock, self._db() as db:
             db.execute("""INSERT INTO org_mail_grants
                 (organization_id, owner_user_id, provider, account_id,
@@ -275,6 +277,8 @@ class MailAccessDirectory:
                     scan_attachments: bool = False, mode: str = "review") -> dict:
         self.require_admin(org, actor)
         self.require_member(org, owner)
+        if provider == "archive":
+            raise ValueError("Imported sources cannot be forwarding-rule sources")
         if mode == "auto":
             self.assert_grant(org, actor, owner=owner, provider=provider,
                               account_id=account_id, forwarding=True)
