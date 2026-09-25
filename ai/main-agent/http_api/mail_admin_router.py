@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -23,7 +23,7 @@ class ChangeStatus(BaseModel):
 
 class AccountGrant(BaseModel):
     owner_user_id: str = Field(min_length=1)
-    provider: Literal["gmail", "outlook"]
+    provider: Literal["gmail", "outlook", "archive"]
     account_id: str = Field(min_length=1)
     recipient_user_id: str = Field(min_length=1)
     can_forward: bool = False
@@ -67,13 +67,24 @@ def build_mail_admin_router(runtime, authenticated_user, authenticated_organizat
     @router.get("/admin/connected-accounts")
     def connected_accounts(owner_user_id: str, actor: str = Depends(authenticated_user),
                            org: str = Depends(authenticated_organization)):
+        return {"items": runtime.connected_org_mail_accounts(org, actor, owner_user_id)}
+
+    @router.post("/admin/import")
+    async def import_mail_archive(address: str = Form(...),
+                                  archive: UploadFile = File(...),
+                                  actor: str = Depends(authenticated_user),
+                                  org: str = Depends(authenticated_organization)):
         runtime.mail_directory.require_admin(org, actor)
-        authorized = {
-            (item["provider"], item["account_id"])
-            for item in runtime.mail_directory.connected_in_org(org, actor, owner=owner_user_id)
-        }
-        connected = runtime.refresh_mail_accounts(owner_user_id)
-        return {"items": [a for a in connected if (a["provider"], a["account_id"]) in authorized]}
+        filename = archive.filename or ""
+        try:
+            content = await archive.read(45 * 1024 * 1024 + 1)
+            return runtime.import_mail_archive(
+                org, actor, address=address, filename=filename, content=content
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        finally:
+            await archive.close()
 
     @router.get("/admin/grants")
     def all_grants(actor: str = Depends(authenticated_user), org: str = Depends(authenticated_organization)):
@@ -87,11 +98,13 @@ def build_mail_admin_router(runtime, authenticated_user, authenticated_organizat
             org, actor, owner=payload.owner_user_id, provider=payload.provider,
             account_id=payload.account_id
         )
-        connected = runtime.refresh_mail_accounts(payload.owner_user_id)
+        connected = runtime.connected_org_mail_accounts(org, actor, payload.owner_user_id)
         matching = [account for account in connected if
                     account["account_id"] == payload.account_id and account["provider"] == payload.provider]
         if not matching:
             raise HTTPException(status_code=404, detail="Connected account not found")
+        if payload.provider == "archive" and payload.can_forward:
+            raise HTTPException(status_code=422, detail="Imported archives are read-only")
         try:
             return runtime.mail_directory.grant_account(
                 org, actor, owner_user_id=payload.owner_user_id, provider=payload.provider,
@@ -101,7 +114,7 @@ def build_mail_admin_router(runtime, authenticated_user, authenticated_organizat
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.delete("/admin/grants")
-    def revoke_account(owner_user_id: str, provider: Literal["gmail", "outlook"],
+    def revoke_account(owner_user_id: str, provider: Literal["gmail", "outlook", "archive"],
                        account_id: str, recipient_user_id: str,
                        actor: str = Depends(authenticated_user), org: str = Depends(authenticated_organization)):
         runtime.mail_directory.revoke_account(
