@@ -12,7 +12,7 @@ export type MailOrgUser = {
 export type MailGrant = {
   organization_id: string;
   owner_user_id: string;
-  provider: 'gmail' | 'outlook';
+  provider: 'gmail' |'gmail' | 'outlook' | 'archive';
   account_id: string;
   recipient_user_id: string;
   address: string;
@@ -23,13 +23,13 @@ export type ConnectedAccount = {
   owner_user_id?: string;
   account_id: string;
   address: string;
-  provider: 'gmail' | 'outlook';
+  provider: 'gmail' |'gmail' | 'outlook' | 'archive';
 };
 
 export type ForwardingRule = {
   rule_id: string;
   owner_user_id: string;
-  provider: 'gmail' | 'outlook';
+  provider: 'gmail' |'gmail' | 'outlook' | 'archive';
   account_id: string;
   match_text: string;
   destination: string;
@@ -43,7 +43,7 @@ export type ForwardJob = {
   organization_id: string;
   owner_user_id: string;
   account_id: string;
-  provider: 'gmail' | 'outlook';
+  provider: 'gmail' |'gmail' | 'outlook' | 'archive';
   rule_id: string;
   email_id: string;
   destination: string;
@@ -154,4 +154,23 @@ export function setMailRoutingRuleStatus(ruleId: string, active: boolean) {
     method: 'POST',
     body: JSON.stringify({ active }),
   });
+}
+
+export async function uploadMailArchive(address: string, archive: File) {
+  const body = new FormData();
+  body.set('address', address);
+  body.set('archive', archive);
+  const response = await fetch(`${API_BASE}/mail/admin/import`, {
+    method: 'POST',
+    credentials: 'include',
+    body,
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(typeof error.detail === 'string' ? error.detail : `Import failed: ${response.status}`);
+  }
+  return response.json() as Promise<{
+    address: string; account_id: string; imported: number;
+    received: number; already_present: number; read_only: boolean;
+  }>;
 }
