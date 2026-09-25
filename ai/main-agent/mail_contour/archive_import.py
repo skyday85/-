@@ -5,6 +5,7 @@ It is usable before online IMAP connectors are deployed.
 """
 from __future__ import annotations
 
+import hashlib
 import mailbox
 import os
 import re
@@ -55,6 +56,7 @@ def parse_file(filename: str, content: bytes):
                 box.close()
     imported = []
     for position, item in enumerate(originals[:MAX_MESSAGES]):
+        fingerprint = hashlib.sha256(item.as_bytes()).hexdigest()
         attachments = []
         body_text, body_html = "", ""
         for part_no, part in enumerate(item.walk()):
@@ -92,7 +94,7 @@ def parse_file(filename: str, content: bytes):
         except (TypeError, ValueError, OverflowError):
             received_at = datetime.now(timezone.utc).isoformat()
         imported.append({
-            "provider_message_id": f"import:{position}",
+            "provider_message_id": "import:" + fingerprint,
             "internet_message_id": str(item.get("Message-ID") or "") or None,
             "sender": next((address for _, address in
                             getaddresses([str(item.get("From", ""))]) if address), ""),
