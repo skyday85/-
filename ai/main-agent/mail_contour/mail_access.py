@@ -184,6 +184,20 @@ class MailAccessDirectory:
                 WHERE organization_id=? AND owner_user_id=?
                 ORDER BY address""", (org, owner)).fetchall()]
 
+    def register_local_archive(self, org: str, actor: str, *, account_id: str,
+                               address: str) -> dict:
+        """Only an authenticated organization admin can register an upload source."""
+        self.require_admin(org, actor)
+        with self._lock, self._db() as db:
+            db.execute("""INSERT INTO org_mail_connections
+                (organization_id, owner_user_id, provider, account_id, address)
+                VALUES (?, ?, 'archive', ?, ?)
+                ON CONFLICT(organization_id, owner_user_id, provider, account_id)
+                DO UPDATE SET address=excluded.address""",
+                (org, actor, account_id, _email(address)))
+        return {"organization_id": org, "owner_user_id": actor,
+                "provider": "archive", "account_id": account_id, "address": address}
+
     def require_org_connection(self, org: str, actor: str, *, owner: str,
                                provider: str, account_id: str) -> dict:
         authorized = self.connected_in_org(org, actor, owner=owner)
@@ -198,8 +212,10 @@ class MailAccessDirectory:
         self.require_admin(org, actor)
         self.require_member(org, owner_user_id)
         self.require_member(org, recipient_user_id)
-        if provider.lower() not in {"gmail", "outlook"} or not account_id.strip():
+        if provider.lower() not in {"gmail", "outlook", "archive"} or not account_id.strip():
             raise ValueError("Invalid mail account")
+        if provider.lower() == "archive" and can_forward:
+            raise ValueError("Imported mail does not support forwarding")
         with self._lock, self._db() as db:
             db.execute("""INSERT INTO org_mail_grants
                 (organization_id, owner_user_id, provider, account_id,
@@ -261,6 +277,8 @@ class MailAccessDirectory:
                     scan_attachments: bool = False, mode: str = "review") -> dict:
         self.require_admin(org, actor)
         self.require_member(org, owner)
+        if provider == "archive":
+            raise ValueError("Imported sources cannot be forwarding-rule sources")
         if mode == "auto":
             self.assert_grant(org, actor, owner=owner, provider=provider,
                               account_id=account_id, forwarding=True)

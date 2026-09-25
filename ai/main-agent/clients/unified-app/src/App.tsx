@@ -24,6 +24,8 @@ import {
 import { ForwardReview, MailManagement } from './MailManagement';
 import type { MailGrant } from './mail-admin-api';
 
+const MAIL_ONLY_MODE = import.meta.env.VITE_MAIL_ONLY_MODE === 'true';
+
 const MAIL_FOLDERS = [
   ['all', 'Все'],
   ['important_requests', 'Важное / Запросы'],
@@ -49,7 +51,7 @@ export default function App() {
   const [vehicles, setVehicles] = useState<Array<{ id: string; stateNumber?: string; brand?: string; model?: string }>>([]);
   const [documentTargets, setDocumentTargets] = useState<Record<string, { vehicleId: string; repairId: string; purchaseId: string }>>({});
   const [workItems, setWorkItems] = useState<Record<string, FleetWorkItems>>({});
-  const [active, setActive] = useState('main_agent');
+  const [active, setActive] = useState(MAIL_ONLY_MODE ? 'mail' : 'main_agent');
   const [error, setError] = useState<string | null>(null);
   const [command, setCommand] = useState('');
   const [agentResult, setAgentResult] = useState<Record<string, unknown> | null>(null);
@@ -130,7 +132,8 @@ export default function App() {
   }
 
   useEffect(() => {
-    Promise.all([reloadCore(), reloadFinance(), reloadDocuments()]).catch((e) => setError(e instanceof Error ? e.message : 'Ошибка загрузки'));
+    const loads = MAIL_ONLY_MODE ? [reloadCore()] : [reloadCore(), reloadFinance(), reloadDocuments()];
+    Promise.all(loads).catch((e) => setError(e instanceof Error ? e.message : 'Ошибка загрузки'));
   }, [platform]);
 
   async function selectMailFolder(folder: string) {
@@ -236,14 +239,15 @@ export default function App() {
     { module_id: 'tasks', title: 'Задачи', routes: ['/tasks'] },
   ];
   const isMailAdmin = boot?.mail_identity?.role === 'owner' || boot?.mail_identity?.role === 'admin';
+  const visibleNav = MAIL_ONLY_MODE ? baseNav.filter((item) => item.module_id === 'mail') : baseNav;
   const nav = isMailAdmin
-    ? [...baseNav, { module_id: 'mail_settings', title: 'Управление почтой', routes: ['/mail/admin'] }]
-    : baseNav;
+    ? [...visibleNav, { module_id: 'mail_settings', title: 'Управление почтой', routes: ['/mail/admin'] }]
+    : visibleNav;
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand">Главный агент</div>
+        <div className="brand">{MAIL_ONLY_MODE ? 'Почтовый сервис' : 'Главный агент'}</div>
         <nav>{nav.map((item) => (
           <button key={item.module_id} className={active === item.module_id ? 'active' : ''} onClick={() => setActive(item.module_id)}>
             <span>{item.title}</span>
@@ -256,7 +260,7 @@ export default function App() {
       <main className="workspace">
         <header className="topbar">
           <div><strong>{nav.find((x) => x.module_id === active)?.title ?? 'Главный агент'}</strong><small>{platform === 'iphone' ? 'iPhone' : 'Mac'} · единый контур</small></div>
-          <button className="agent-button" onClick={() => setActive('main_agent')}>Спросить агента</button>
+          {!MAIL_ONLY_MODE && <button className="agent-button" onClick={() => setActive('main_agent')}>Спросить агента</button>}
         </header>
         {error ? <div className="error">{error}</div> : null}
 
@@ -292,8 +296,8 @@ export default function App() {
                   ))}
                 </select>
                 <button disabled={busy} onClick={refreshMail}>{busy ? 'Синхронизация…' : 'Обновить'}</button>
-                {isMailAdmin && <button onClick={() => connect('gmail')}>+ Gmail</button>}
-                {isMailAdmin && <button onClick={() => connect('outlook')}>+ Outlook</button>}
+                {isMailAdmin && !MAIL_ONLY_MODE && <button onClick={() => connect('gmail')}>+ Gmail</button>}
+                {isMailAdmin && !MAIL_ONLY_MODE && <button onClick={() => connect('outlook')}>+ Outlook</button>}
               </div>
             </div>
             <div className="folder-tabs">
@@ -318,7 +322,8 @@ export default function App() {
         )}
 
         {active === 'mail_settings' && isMailAdmin && boot?.mail_identity && (
-          <MailManagement currentUserId={boot.mail_identity.user_id} />
+          <MailManagement currentUserId={boot.mail_identity.user_id}
+            onImport={() => { void reloadCore().catch((cause) => setError(String(cause))); }} />
         )}
 
         {active === 'procurement' && (

@@ -17,6 +17,7 @@ from integrations.fleet_documents import FleetDocumentQueue
 from integrations.http_dispatcher import HttpIntegrationDispatcher
 from mail_contour.mail_access import MailAccessDirectory, AccessDenied
 from mail_contour.deduplication import collapse_for_view
+from mail_contour.archive_import import mailbox_address, parse_file
 from mail_contour.processing_dedup import MailProcessingDeduper
 from mail_contour.text_routing import MailTextRouter
 from mail_contour.mail_collector_agent import MailCollectorAgent
@@ -220,6 +221,64 @@ class MainAgentRuntime:
             "processing_failed_email_ids": failed,
         }
 
+    def import_mail_archive(self, org: str, actor: str, *, address: str,
+                            filename: str, content: bytes) -> dict:
+        """Read-only import: classify for review, but never auto-forward or publish events."""
+        self.mail_directory.require_admin(org, actor)
+        address = mailbox_address(address)
+        parsed = parse_file(filename, content)
+        source_id = f"archive:{org}:{address}"
+        self.mail_directory.register_local_archive(
+            org, actor, account_id=source_id, address=address
+        )
+        self.mail_collector.add_account(
+            user_id=actor, account_id=source_id, address=address,
+            provider="archive", display_name=f"{address} (архив)",
+        )
+        # An imported source can always be viewed by its uploading admin,
+        # but it has no permission to send or forward mail.
+        self.mail_directory.grant_account(
+            org, actor, owner_user_id=actor, provider="archive",
+            account_id=source_id, recipient_user_id=actor,
+            address=address, can_forward=False,
+        )
+        rows, payload_by_id = [], {}
+        for parsed_message in parsed:
+            original_id = parsed_message["provider_message_id"]
+            source_email_id = f"{source_id}:{original_id}"
+            attachments = parsed_message.pop("attachments")
+            rows.append({**parsed_message, "email_id": source_email_id,
+                         "account_id": source_id,
+                         "attachments": [{k: v for k, v in a.items() if k != "_binary"}
+                                         for a in attachments]})
+            payload_by_id[source_email_id] = attachments
+        imported = self.ingest_mail(actor, rows)
+        for item in imported:
+            email_id = item["email_id"]
+            for attachment in payload_by_id.get(email_id, []):
+                self.mail_persistence.save_archive_attachment(
+                    org, actor, email_id, attachment["attachment_id"],
+                    attachment["filename"], attachment["mime_type"], attachment["_binary"],
+                )
+            self.mail_collector.mailbox.classify_and_route(actor, email_id)
+        return {"account_id": source_id, "address": address,
+                "received": len(parsed), "imported": len(imported),
+                "already_present": len(parsed) - len(imported),
+                "read_only": True, "auto_forward": False}
+
+    def connected_org_mail_accounts(self, org: str, actor: str, owner: str) -> list[dict]:
+        registered = self.mail_directory.connected_in_org(org, actor, owner=owner)
+        live_accounts = self.refresh_mail_accounts(owner)
+        available = {(a["provider"], a["account_id"]): a for a in live_accounts}
+        result = []
+        for conn in registered:
+            key = (conn["provider"], conn["account_id"])
+            if conn["provider"] == "archive":
+                result.append({**conn, "display_name": f"{conn['address']} (архив)"})
+            elif key in available:
+                result.append(available[key])
+        return result
+
     def register_mail_provider(self, backend):
         self.mail_providers.register(backend)
 
@@ -353,13 +412,23 @@ class MainAgentRuntime:
     def visible_process_mail(self, org: str, viewer: str, scoped_email_id: str):
         self.visible_mail_message(org, viewer, scoped_email_id)
         owner, email_id = self._decode_scoped_mail_id(scoped_email_id)
-        result = self.process_mail(owner, email_id, organization_id=org)
+        original = self.mail_collector.mailbox.get_message(owner, email_id)
+        provider = self.mail_collector.mailbox.accounts[(owner, original["account_id"])].provider
+        result = (self.mail_collector.mailbox.classify_and_route(owner, email_id)
+                  if provider == "archive" else
+                  self.process_mail(owner, email_id, organization_id=org))
         return {**result, "email_id": scoped_email_id, "source_owner_user_id": owner}
 
     def visible_mail_state(self, org: str, viewer: str):
         grants = self.mail_directory.grants(org, viewer)
         connections = []
         for grant in grants:
+            if grant["provider"] == "archive":
+                connections.append({"provider": "archive", "account_id": grant["account_id"],
+                                    "connected": False, "imported_only": True,
+                                    "reauth_required": False,
+                                    "source_owner_user_id": grant["owner_user_id"]})
+                continue
             try:
                 state = self.mail_providers.get(grant["provider"]).connection_state(
                     grant["owner_user_id"], grant["account_id"])
@@ -382,6 +451,8 @@ class MainAgentRuntime:
         duplicates_suppressed = 0
         for grant in grants:
             owner, account_id = grant["owner_user_id"], grant["account_id"]
+            if grant["provider"] == "archive":
+                continue  # Uploaded files are not remotely synchronized.
             if (owner, account_id) in seen:
                 continue
             seen.add((owner, account_id))

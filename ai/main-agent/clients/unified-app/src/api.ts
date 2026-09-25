@@ -8,7 +8,7 @@ export type ModuleManifest = {
 export type AssignedMailAccount = {
   organization_id: string;
   owner_user_id: string;
-  provider: 'gmail' | 'outlook';
+  provider: 'gmail' | 'outlook' | 'archive';
   account_id: string;
   recipient_user_id: string;
   address: string;

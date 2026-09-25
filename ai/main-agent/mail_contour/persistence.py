@@ -34,7 +34,13 @@ class MailPersistence:
               provider_message_id TEXT NOT NULL, email_id TEXT NOT NULL,
               PRIMARY KEY(user_id, provider, account_id, provider_message_id)
             );
-            CREATE TABLE IF NOT EXISTS mail_sync_state (
+            CREATE TABLE IF NOT EXISTS mail_archive_attachments (
+              organization_id TEXT NOT NULL, user_id TEXT NOT NULL,
+              email_id TEXT NOT NULL, attachment_id TEXT NOT NULL,
+              filename TEXT NOT NULL, mime_type TEXT NOT NULL, content BLOB NOT NULL,
+              PRIMARY KEY (organization_id, user_id, email_id, attachment_id)
+            );
+                        CREATE TABLE IF NOT EXISTS mail_sync_state (
               user_id TEXT NOT NULL, account_id TEXT NOT NULL, data TEXT NOT NULL,
               PRIMARY KEY(user_id, account_id)
             );
@@ -79,3 +85,23 @@ class MailPersistence:
     def delete(self, table: str, where: str, params: tuple[Any, ...]):
         with self._lock, self._connect() as db:
             db.execute(f"DELETE FROM {table} WHERE {where}", params)
+
+    def save_archive_attachment(self, organization_id: str, user_id: str, email_id: str,
+                                attachment_id: str, filename: str, mime_type: str,
+                                content: bytes) -> None:
+        with self._lock, self._connect() as db:
+            db.execute("""INSERT OR IGNORE INTO mail_archive_attachments
+                (organization_id, user_id, email_id, attachment_id, filename, mime_type, content)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (organization_id, user_id, email_id, attachment_id, filename, mime_type, content))
+
+    def archive_attachment(self, organization_id: str, user_id: str, email_id: str,
+                           attachment_id: str) -> dict:
+        with self._lock, self._connect() as db:
+            row = db.execute("""SELECT filename, mime_type, content FROM mail_archive_attachments
+                WHERE organization_id=? AND user_id=? AND email_id=? AND attachment_id=?""",
+                (organization_id, user_id, email_id, attachment_id)).fetchone()
+        if row is None:
+            raise KeyError("Imported attachment not found")
+        return {"attachment_id": attachment_id, "filename": row["filename"],
+                "mime_type": row["mime_type"], "content_bytes": bytes(row["content"])}
