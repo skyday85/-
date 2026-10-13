@@ -34,3 +34,34 @@ The Vite/Tauri client uses `http://127.0.0.1:8000` by default in local developme
 - `GET /mail/oauth/{gmail|outlook}/callback`
 
 The API talks to `MainAgentRuntime`; clients never access module databases or provider credentials directly.
+
+## Mail identity and routing
+
+Organization membership is mandatory for the client mailbox endpoints. Set
+`APP_ORGANIZATION_ID`, `MAIL_BOOTSTRAP_OWNER_USER_ID`, and
+`MAIL_BOOTSTRAP_OWNER_EMAIL` together for initial owner creation; this ID
+must correspond to a trusted authenticated subject. A reverse proxy/IdP must
+verify users and organization membership, strip incoming identity headers,
+and insert verified identity plus `APP_TRUSTED_PROXY_SECRET` in production.
+Do not expose development header authentication over a public network.
+
+- `GET/POST /mail/admin/users`: list/create mail-service users (externally authenticated).
+- `POST /mail/admin/users/{user_id}/status`: deactivate/reactivate accounts.
+- `GET /mail/admin/connected-accounts`: connected provider accounts for an
+  owner in the same organization.
+- `GET/POST/DELETE /mail/admin/grants`: assign/revoke mailbox visibility and
+  forwarding approval.
+- `GET/POST /mail/admin/rules`: manage content-matching routing rules.
+- `POST /mail/admin/rules/{rule_id}/status`: immediately enable/disable rules.
+- `GET /mail/forward-jobs`: only jobs from explicitly assigned mailboxes.
+- `GET /mail/forward-jobs/{job_id}/preview`: permission-scoped source preview.
+- `GET /mail/forward-jobs/{job_id}/attachments/{id}`: permission-scoped download.
+- `POST /mail/forward-jobs/{job_id}/approve|dismiss`: explicit send decision.
+
+The current SQLite implementation is suitable for a single development service.
+Before horizontally scaling, migrate organization directory, account grants,
+forwarding idempotency/claims and mail persistence to a shared transactional
+database. Provider OAuth secrets remain in the separate encrypted Mail Gateway.
+For scanned PDFs/image OCR, deploy resource-limited `tesseract` (rus+eng) and
+`pdftoppm` binaries; scanned files with missing tooling or unreadable text
+stay in manual review and are never automatically sent.

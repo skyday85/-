@@ -17,6 +17,10 @@ class AuthorizePayload(BaseModel):
     scopes: list[str]
 
 
+class ForwardPayload(BaseModel):
+    destination: str = Field(min_length=3, max_length=254)
+
+
 class CallbackPayload(AuthorizePayload):
     code: str = Field(min_length=1)
 
@@ -98,3 +102,19 @@ def attachment(provider: Literal["gmail", "outlook"], account_id: str, provider_
         return _provider(provider).fetch_attachment(user_id, account_id, provider_message_id, attachment_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Mail account not found") from exc
+
+
+@app.post("/v1/providers/{provider}/accounts/{account_id}/messages/{provider_message_id}/forward",
+          dependencies=[Depends(_service_auth)])
+def forward(provider: Literal["gmail", "outlook"], account_id: str,
+            provider_message_id: str, payload: ForwardPayload, user_id: str = Depends(_mail_user)):
+    from mail_contour.mail_access import _email
+    try:
+        return _provider(provider).forward_message(user_id, account_id, provider_message_id,
+                                                   _email(payload.destination))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Mail account not found") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
