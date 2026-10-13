@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from app_shell.client_api import ClientContext
+from ecosystem.business_cases import CaseConflict
 from mail_contour.http_gateway import HttpOAuthMailGateway
 from runtime import build_runtime
 
@@ -45,6 +46,33 @@ class ConfirmClassificationRequest(BaseModel):
     operation_type: Optional[str] = None
     category: Optional[str] = None
     rationale: Optional[str] = None
+
+
+class BusinessCaseCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    case_type: Literal["general", "procurement", "fleet_maintenance", "transport_request", "finance_review"] = "general"
+
+
+class BusinessCaseLinkRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    record_type: str = Field(min_length=1)
+    record_id: str = Field(min_length=1)
+
+
+class BusinessCaseSignalRequest(BaseModel):
+    project_id: str = Field(min_length=1)
+    source_record_id: str = Field(min_length=1)
+    source_event_id: str = Field(min_length=1)
+    event_type: Literal["observed", "progress", "completed", "failed", "review_requested"]
+    metadata: dict = Field(default_factory=dict)
+
+
+class BusinessCaseReviewDecisionRequest(BaseModel):
+    approved: bool
+
+
+class BusinessCaseResumeRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class FleetDocumentAssignmentRequest(BaseModel):
@@ -157,6 +185,23 @@ def authenticated_organization(request: Request) -> str:
     raise HTTPException(status_code=401, detail="Organization context required")
 
 
+def authenticated_case_integration(request: Request) -> None:
+    secret = os.getenv("APP_CASE_INGEST_KEY", "")
+    supplied = request.headers.get("X-Case-Integration-Key", "")
+    if not secret or not hmac.compare_digest(secret, supplied):
+        raise HTTPException(status_code=401, detail="Business case integration key required")
+
+
+def case_api_error(exc: Exception):
+    if isinstance(exc, KeyError):
+        raise HTTPException(status_code=404, detail="Business case resource not found") from exc
+    if isinstance(exc, CaseConflict):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    raise exc
+
+
 def public_api_base(request: Request) -> str:
     configured = os.getenv("PUBLIC_API_BASE_URL", "").rstrip("/")
     base = configured or str(request.base_url).rstrip("/")
@@ -186,6 +231,91 @@ def ecosystem_project(project_id: str, _user: str = Depends(authenticated_user))
     if project is None:
         raise HTTPException(status_code=404, detail="Ecosystem project not found")
     return project
+
+
+@app.get("/business-cases")
+def list_business_cases(status: Optional[str] = None,
+                        _user: str = Depends(authenticated_user),
+                        organization_id: str = Depends(authenticated_organization)):
+    try:
+        return {"items": runtime.list_business_cases(organization_id, status)}
+    except (ValueError, CaseConflict, KeyError) as exc:
+        case_api_error(exc)
+
+
+@app.post("/business-cases", status_code=201)
+def create_business_case(payload: BusinessCaseCreateRequest,
+                         user_id: str = Depends(authenticated_user),
+                         organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.create_business_case(organization_id, user_id, payload.title, payload.case_type)
+    except (ValueError, CaseConflict, KeyError) as exc:
+        case_api_error(exc)
+
+
+@app.get("/business-cases/{case_id}")
+def get_business_case(case_id: str,
+                      _user: str = Depends(authenticated_user),
+                      organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.get_business_case(organization_id, case_id)
+    except (ValueError, CaseConflict, KeyError) as exc:
+        case_api_error(exc)
+
+
+@app.post("/business-cases/{case_id}/links")
+def link_business_case_record(case_id: str, payload: BusinessCaseLinkRequest,
+                              user_id: str = Depends(authenticated_user),
+                              organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.link_business_record(organization_id, case_id, payload.project_id,
+                                            payload.record_type, payload.record_id, user_id)
+    except (ValueError, CaseConflict, KeyError) as exc:
+        case_api_error(exc)
+
+
+@app.post("/business-cases/{case_id}/signals")
+def ingest_business_case_signal(case_id: str, payload: BusinessCaseSignalRequest,
+                                _integration: None = Depends(authenticated_case_integration),
+                                _user: str = Depends(authenticated_user),
+                                organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.record_business_signal(organization_id, case_id, payload.project_id,
+                                              payload.source_record_id, payload.source_event_id,
+                                              payload.event_type, payload.metadata)
+    except (ValueError, CaseConflict, KeyError) as exc:
+        case_api_error(exc)
+
+
+@app.post("/business-cases/{case_id}/reviews/{review_id}/decision")
+def decide_business_case_review(case_id: str, review_id: str,
+                                payload: BusinessCaseReviewDecisionRequest,
+                                user_id: str = Depends(authenticated_user),
+                                organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.decide_business_review(organization_id, case_id, review_id, user_id, payload.approved)
+    except (ValueError, CaseConflict, KeyError) as exc:
+        case_api_error(exc)
+
+
+@app.post("/business-cases/{case_id}/resume")
+def resume_business_case(case_id: str, payload: BusinessCaseResumeRequest,
+                         user_id: str = Depends(authenticated_user),
+                         organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.resume_business_case(organization_id, case_id, user_id, payload.reason)
+    except (ValueError, CaseConflict, KeyError) as exc:
+        case_api_error(exc)
+
+
+@app.post("/business-cases/{case_id}/close")
+def close_business_case(case_id: str,
+                        user_id: str = Depends(authenticated_user),
+                        organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.close_business_case(organization_id, case_id, user_id)
+    except (ValueError, CaseConflict, KeyError) as exc:
+        case_api_error(exc)
 
 
 @app.get("/finance/transactions")
