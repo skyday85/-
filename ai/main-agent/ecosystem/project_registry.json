@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "policy": {
+    "default_access": "deny",
+    "read_scope": "registered_repositories_only",
+    "write_scope": "feature_branches_only",
+    "direct_main_write": false,
+    "repository_admin": false,
+    "secrets_access": false,
+    "history_rewrite": false,
+    "repository_delete": false
+  },
+  "projects": [
+    {
+      "project_id": "main-agent",
+      "repository": "skyday85/main-agent",
+      "status": "target_repository",
+      "access": "write_feature_branches"
+    },
+    {
+      "project_id": "fleet-management",
+      "repository": "skyday85/fleet-management",
+      "status": "active",
+      "access": "read_and_controlled_write"
+    },
+    {
+      "project_id": "finance-planning",
+      "repository": "skyday85/finance-planning",
+      "status": "active",
+      "access": "read_and_controlled_write"
+    },
+    {
+      "project_id": "mail-service",
+      "repository": "skyday85/mail-service",
+      "status": "target_repository",
+      "access": "read_and_controlled_write"
+    }
+  ]
+}
