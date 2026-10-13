@@ -8,6 +8,7 @@ from app_shell.mail_accounts import MailAccountsViewModel
 from app_shell.navigation import AppShellRegistry
 from connectors.http_fleet_backend import HttpFleetBackend
 from ecosystem.expense_bridge import ExpenseBridge
+from ecosystem.project_registry import ProjectRegistry
 from finance.banking import BankingModule
 from finance.invoices import InvoiceWorkflow
 from integrations.events import IntegrationOutbox
@@ -31,6 +32,7 @@ class MainAgentRuntime:
         self.invoices = InvoiceWorkflow()
         self.parts_catalogs = PartsCatalogRegistry()
         self.expense_bridge = ExpenseBridge()
+        self.project_registry = ProjectRegistry()
         self.agent_registry = AgentRegistry()
         self.delegation = DelegationEngine(self.agent_registry)
         db_path = os.getenv("MAIL_DATABASE_PATH", "./data/mail_contour.sqlite3")
@@ -80,6 +82,16 @@ class MainAgentRuntime:
 
     def list_specialized_agents(self):
         return self.agent_registry.list_agents()
+
+    def list_ecosystem_projects(self):
+        return self.project_registry.list_projects()
+
+    def get_ecosystem_project(self, project_id: str):
+        project = self.project_registry.get(project_id)
+        return None if project is None else project.__dict__.copy()
+
+    def ecosystem_repositories(self, *, active_only: bool = False):
+        return self.project_registry.repositories(active_only=active_only)
 
     def delegate_task(self, *, agent_id: str, capability: str, instruction: str, context=None):
         return self.delegation.delegate(agent_id=agent_id, capability=capability, instruction=instruction, context=context)
