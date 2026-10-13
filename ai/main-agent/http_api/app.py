@@ -175,6 +175,19 @@ def bootstrap(request: Request, platform: Literal["mac", "iphone"], user_id: str
     return runtime.client_api.bootstrap(ClientContext(user_id=user_id, device_id=request.headers.get("X-Device-Id", "unknown-device"), platform=platform, app_version=request.headers.get("X-App-Version", "development")))
 
 
+@app.get("/ecosystem/projects")
+def ecosystem_projects(_user: str = Depends(authenticated_user)):
+    return {"items": runtime.list_ecosystem_projects()}
+
+
+@app.get("/ecosystem/projects/{project_id}")
+def ecosystem_project(project_id: str, _user: str = Depends(authenticated_user)):
+    project = runtime.get_ecosystem_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Ecosystem project not found")
+    return project
+
+
 @app.get("/finance/transactions")
 def finance_transactions(_user: str = Depends(authenticated_user)):
     return runtime.list_bank_transactions()
