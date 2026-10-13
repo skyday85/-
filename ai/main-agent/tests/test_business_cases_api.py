@@ -9,6 +9,10 @@ from ecosystem.business_cases import BusinessCaseStore
 
 @pytest.fixture
 def case_api(tmp_path, monkeypatch):
+    monkeypatch.setenv("FLEET_API_BASE_URL", "http://localhost:3000")
+    monkeypatch.setenv("FLEET_MAIN_AGENT_API_KEY", "test-only-fleet-key")
+    monkeypatch.setenv("MAIL_DATABASE_PATH", str(tmp_path / "mail.sqlite3"))
+    monkeypatch.setenv("MAIN_AGENT_DATABASE_PATH", str(tmp_path / "main-agent.sqlite3"))
     api = import_module("http_api.app")
     store = BusinessCaseStore(str(tmp_path / "api-business-cases.sqlite3"))
     monkeypatch.setattr(api.runtime, "business_cases", store)
