@@ -101,9 +101,18 @@ def test_rejected_review_blocks_case_until_explicit_resume(store):
         store.close_case("org-a", identifier, "user-a")
     with pytest.raises(ValueError):
         store.resume_case("org-a", identifier, "user-a", " ")
-    resumed = store.resume_case("org-a", identifier, "user-a", "Данные уточнены")
+    with pytest.raises(CaseConflict):
+        store.resume_case("org-a", identifier, "user-a", "Данные уточнены")
+    assert store.get_case("org-a", identifier)["status"] == "blocked"
+
+    
+def test_failed_external_operation_can_be_resumed_with_audit(store):
+    identifier = case(store)["case_id"]
+    store.record_signal("org-a", identifier, "fleet-management", "repair-1", "failed-1", "failed")
+    assert store.get_case("org-a", identifier)["status"] == "blocked"
+    resumed = store.resume_case("org-a", identifier, "user-a", "Техническая ошибка устранена")
     assert resumed["status"] == "in_progress"
-    assert resumed["audit"][-1]["details"]["reason"] == "Данные уточнены"
+    assert resumed["audit"][-1]["details"]["reason"] == "Техническая ошибка устранена"
 
 
 def test_multiple_reviews_and_failure_cannot_be_bypassed_by_approval(store):
