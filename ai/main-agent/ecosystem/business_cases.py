@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -72,11 +73,16 @@ class BusinessCaseStore:
             );
             """)
 
+    @contextmanager
     def _db(self):
         db = sqlite3.connect(self.path, timeout=10)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys=ON")
-        return db
+        try:
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA foreign_keys=ON")
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def _case(self, db, org, case_id):
         row = db.execute("SELECT * FROM business_cases WHERE organization_id=? AND case_id=?",
@@ -254,6 +260,10 @@ class BusinessCaseStore:
             case = self._case(db, org, case_id)
             if case["status"] != "blocked":
                 raise CaseConflict("only blocked cases can be resumed")
+            rejected = db.execute("SELECT count(*) FROM business_case_reviews WHERE case_id=? AND status='rejected'",
+                                  (case_id,)).fetchone()[0]
+            if rejected:
+                raise CaseConflict("rejected review cannot be bypassed; open a corrected case")
             pending = db.execute("SELECT count(*) FROM business_case_reviews WHERE case_id=? AND status='pending'",
                                  (case_id,)).fetchone()[0]
             status, now = ("needs_review" if pending else "in_progress"), _now()
