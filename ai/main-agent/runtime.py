@@ -9,6 +9,7 @@ from app_shell.navigation import AppShellRegistry
 from connectors.http_fleet_backend import HttpFleetBackend
 from ecosystem.expense_bridge import ExpenseBridge
 from ecosystem.project_registry import ProjectRegistry
+from ecosystem.business_cases import BusinessCaseStore
 from finance.banking import BankingModule
 from finance.invoices import InvoiceWorkflow
 from integrations.events import IntegrationOutbox
@@ -33,6 +34,7 @@ class MainAgentRuntime:
         self.parts_catalogs = PartsCatalogRegistry()
         self.expense_bridge = ExpenseBridge()
         self.project_registry = ProjectRegistry()
+        self.business_cases = BusinessCaseStore(os.getenv('MAIN_AGENT_DATABASE_PATH', './data/main_agent.sqlite3'), self.project_registry)
         self.agent_registry = AgentRegistry()
         self.delegation = DelegationEngine(self.agent_registry)
         db_path = os.getenv("MAIL_DATABASE_PATH", "./data/mail_contour.sqlite3")
@@ -92,6 +94,36 @@ class MainAgentRuntime:
 
     def ecosystem_repositories(self, *, active_only: bool = False):
         return self.project_registry.repositories(active_only=active_only)
+
+    def create_business_case(self, organization_id: str, created_by: str, title: str, case_type: str = "general"):
+        return self.business_cases.create_case(organization_id, created_by, title, case_type)
+
+    def list_business_cases(self, organization_id: str, status: str | None = None):
+        return self.business_cases.list_cases(organization_id, status)
+
+    def get_business_case(self, organization_id: str, case_id: str):
+        return self.business_cases.get_case(organization_id, case_id)
+
+    def link_business_record(self, organization_id: str, case_id: str, project_id: str,
+                             record_type: str, record_id: str, actor_id: str):
+        return self.business_cases.link_record(organization_id, case_id, project_id,
+                                               record_type, record_id, actor_id)
+
+    def record_business_signal(self, organization_id: str, case_id: str, project_id: str,
+                               source_record_id: str, source_event_id: str, event_type: str,
+                               metadata=None):
+        return self.business_cases.record_signal(organization_id, case_id, project_id,
+                                                  source_record_id, source_event_id, event_type, metadata)
+
+    def decide_business_review(self, organization_id: str, case_id: str, review_id: str,
+                               actor_id: str, approved: bool):
+        return self.business_cases.decide_review(organization_id, case_id, review_id, actor_id, approved)
+
+    def resume_business_case(self, organization_id: str, case_id: str, actor_id: str, reason: str):
+        return self.business_cases.resume_case(organization_id, case_id, actor_id, reason)
+
+    def close_business_case(self, organization_id: str, case_id: str, actor_id: str):
+        return self.business_cases.close_case(organization_id, case_id, actor_id)
 
     def delegate_task(self, *, agent_id: str, capability: str, instruction: str, context=None):
         return self.delegation.delegate(agent_id=agent_id, capability=capability, instruction=instruction, context=context)
