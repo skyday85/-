@@ -148,3 +148,41 @@ def test_closed_case_close_is_idempotent_and_does_not_duplicate_audit(store):
     assert result["status"] == "closed"
     again = store.close_case("org-a", identifier, "user-a")
     assert [e["action"] for e in again["audit"]].count("case_closed") == 1
+
+
+def test_mail_to_fleet_to_finance_case_keeps_only_cross_app_references(tmp_path):
+    from ecosystem.project_registry import ProjectDefinition, ProjectRegistry
+
+    projects = ProjectRegistry((
+        ProjectDefinition("mail-service", "Mail", "communications", "skyday85/mail-service",
+                          "application", "active", "read_only"),
+        ProjectDefinition("fleet-management", "Fleet", "fleet", "skyday85/fleet-management",
+                          "application", "active", "read_only"),
+        ProjectDefinition("finance-planning", "Finance", "finance", "skyday85/finance-planning",
+                          "application", "active", "read_only"),
+    ))
+    tracker = BusinessCaseStore(str(tmp_path / "orchestration.sqlite3"), projects)
+    identifier = tracker.create_case("company-1", "owner", "Счёт поставщика", "procurement")["case_id"]
+    steps = [
+        ("mail-service", "email", "mail-123", "observed"),
+        ("fleet-management", "purchase", "purchase-456", "progress"),
+        ("finance-planning", "transaction", "tx-789", "review_requested"),
+    ]
+    for project, kind, record_id, signal_type in steps:
+        tracker.link_record("company-1", identifier, project, kind, record_id, "main-agent")
+        tracker.record_signal("company-1", identifier, project, record_id,
+                              f"{project}:{record_id}", signal_type)
+    state = tracker.get_case("company-1", identifier)
+    assert state["status"] == "needs_review"
+    assert [(x["project_id"], x["record_id"]) for x in state["links"]] == [
+        ("mail-service", "mail-123"),
+        ("fleet-management", "purchase-456"),
+        ("finance-planning", "tx-789"),
+    ]
+    assert len(state["signals"]) == 3
+    assert all("content_bytes" not in x["metadata"] for x in state["signals"])
+    with pytest.raises(CaseConflict):
+        tracker.close_case("company-1", identifier, "owner")
+    review_id = state["reviews"][0]["review_id"]
+    tracker.decide_review("company-1", identifier, review_id, "owner", True)
+    assert tracker.close_case("company-1", identifier, "owner")["status"] == "closed"
