@@ -49,6 +49,17 @@ DEFAULT_PROJECTS: tuple[ProjectDefinition, ...] = (
         api_contract="finance-service-api",
     ),
     ProjectDefinition(
+        project_id="mail-contour",
+        name="Временный почтовый контур Главного агента",
+        domain="communications",
+        repository="skyday85/-",
+        ownership="temporary_integration",
+        status="active",
+        main_agent_access="read_only",
+        api_contract="local-mail-adapter",
+        notes="Текущий прототип; не является независимо развёрнутым mail-service.",
+    ),
+    ProjectDefinition(
         project_id="mail-service",
         name="Почтовый сервис",
         domain="communications",
