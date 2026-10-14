@@ -155,6 +155,8 @@ class AnnualPlanner:
             plan = self._get(db, org, plan_id)
             if plan["status"] != "draft":
                 raise PlanConflict("plan is already approved")
+            if actor != plan["created_by"]:
+                raise PlanConflict("only the plan owner can approve")
             count = db.execute("SELECT COUNT(*) FROM annual_milestones WHERE plan_id=?",
                                (plan_id,)).fetchone()[0]
             if count == 0:
@@ -198,7 +200,9 @@ class AnnualPlanner:
         if type(approved) is not bool:
             raise ValueError("approved must be boolean")
         with self._lock, self._db() as db:
-            self._get(db, org, plan_id)
+            plan = self._get(db, org, plan_id)
+            if actor != plan["created_by"]:
+                raise PlanConflict("only the plan owner can decide changes")
             proposal = db.execute(
                 "SELECT * FROM annual_plan_proposals WHERE organization_id=? AND plan_id=? AND proposal_id=?",
                 (org, plan_id, proposal_id)).fetchone()
