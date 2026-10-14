@@ -41,7 +41,8 @@ class HttpFleetBackend:
             return json.loads(response.read().decode("utf-8"))
 
     def _ua_task_request(self, method: str, *, organization_id: str,
-                         task_id: str, message: Optional[str] = None) -> Dict[str, Any]:
+                         task_id: str, message: Optional[str] = None,
+                         business_case_id: Optional[str] = None) -> Dict[str, Any]:
         """Use the same service credential as fleet API, but a dedicated scoped UA task endpoint."""
         if not organization_id or not task_id:
             raise ValueError("organization_id and task_id are required")
@@ -55,7 +56,8 @@ class HttpFleetBackend:
             if not message or not message.strip() or len(message) > 2000:
                 raise ValueError("UA task message must be 1 to 2000 characters")
             payload = json.dumps({"organizationId": organization_id,
-                                  "taskId": task_id, "message": message},
+                                  "taskId": task_id, "message": message,
+                                  "businessCaseId": business_case_id},
                                  ensure_ascii=False).encode("utf-8")
         headers = {"x-main-agent-key": self.api_key, "accept": "application/json"}
         if payload is not None:
@@ -65,9 +67,11 @@ class HttpFleetBackend:
             return json.loads(response.read().decode("utf-8"))
 
     def create_ua_agent_task(self, *, organization_id: str, message: str,
-                             task_id: Optional[str] = None) -> Dict[str, Any]:
+                             task_id: Optional[str] = None,
+                             business_case_id: Optional[str] = None) -> Dict[str, Any]:
         return self._ua_task_request("POST", organization_id=organization_id,
-                                     task_id=task_id or str(uuid.uuid4()), message=message)
+                                     task_id=task_id or str(uuid.uuid4()), message=message,
+                                     business_case_id=business_case_id)
 
     def get_ua_agent_task(self, *, organization_id: str, task_id: str) -> Dict[str, Any]:
         return self._ua_task_request("GET", organization_id=organization_id, task_id=task_id)
