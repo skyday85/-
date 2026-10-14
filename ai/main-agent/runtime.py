@@ -1,39 +1,67 @@
+import base64
+import os
+
 from agents.delegation import DelegationEngine
 from agents.registry import AgentRegistry
+from app_shell.client_api import UnifiedClientApi
+from app_shell.mail_accounts import MailAccountsViewModel
+from app_shell.navigation import AppShellRegistry
 from connectors.http_fleet_backend import HttpFleetBackend
 from ecosystem.expense_bridge import ExpenseBridge
-from email.mail_collector_agent import MailCollectorAgent
+from ecosystem.project_registry import ProjectRegistry
+from ecosystem.business_cases import BusinessCaseStore
+from ecosystem.annual_planner import AnnualPlanner
+from ecosystem.source_readers import CaseSourceReader, FinanceReadConnector
+from finance.banking import BankingModule
 from finance.invoices import InvoiceWorkflow
+from integrations.events import IntegrationOutbox
+from integrations.fleet_documents import FleetDocumentQueue
+from integrations.http_dispatcher import HttpIntegrationDispatcher
+from mail_contour.mail_collector_agent import MailCollectorAgent
+from mail_contour.persistence import MailPersistence
+from mail_contour.provider_adapters import GmailProviderAdapter, OutlookProviderAdapter
+from mail_contour.providers import MailProviderRegistry
+from mail_contour.sync_service import UnifiedMailSyncService
+from mail_contour.unified_mailbox import UnifiedMailbox
 from main_agent import build_main_agent
 from parts.catalogs import PartsCatalogRegistry
 
 
 class MainAgentRuntime:
-    """Production assembly for the organization-level Main Agent.
-
-    The Main Agent coordinates fleet, finance, parts, unified mail and specialized
-    agents. Source applications retain ownership of their data; no direct
-    database access is granted to the Main Agent or its child agents.
-    """
-
     def __init__(self):
-        self.agent = build_main_agent(HttpFleetBackend())
+        self.fleet_backend = HttpFleetBackend()
+        self.agent = build_main_agent(self.fleet_backend)
+        self.banking = BankingModule()
         self.invoices = InvoiceWorkflow()
         self.parts_catalogs = PartsCatalogRegistry()
         self.expense_bridge = ExpenseBridge()
+        self.project_registry = ProjectRegistry()
+        self.business_cases = BusinessCaseStore(os.getenv('MAIN_AGENT_DATABASE_PATH', './data/main_agent.sqlite3'), self.project_registry)
+        self.annual_planner = AnnualPlanner(os.getenv('MAIN_AGENT_DATABASE_PATH', './data/main_agent.sqlite3'))
         self.agent_registry = AgentRegistry()
         self.delegation = DelegationEngine(self.agent_registry)
-        self.mail_collector = MailCollectorAgent()
+        db_path = os.getenv("MAIL_DATABASE_PATH", "./data/mail_contour.sqlite3")
+        self.mail_persistence = MailPersistence(db_path)
+        self.integration_outbox = IntegrationOutbox(self.mail_persistence)
+        self.integration_dispatcher = self._build_integration_dispatcher()
+        self.fleet_document_queue = FleetDocumentQueue(self.mail_persistence)
+        self.mail_collector = MailCollectorAgent(mailbox=UnifiedMailbox(self.mail_persistence), integration_outbox=self.integration_outbox, fleet_document_queue=self.fleet_document_queue)
+        self.mail_providers = MailProviderRegistry()
+        self.mail_sync = UnifiedMailSyncService(self.mail_collector.mailbox, self.mail_providers, self.mail_persistence)
+        self.app_shell = AppShellRegistry()
+        self.client_api = UnifiedClientApi(self)
+        self.mail_accounts_view = MailAccountsViewModel(self)
 
-    def build_parts_search_plan(self, *, brand: str, query: str,
-                                model: str | None = None,
-                                vin: str | None = None):
-        return self.parts_catalogs.build_search_plan(
-            brand=brand,
-            model=model,
-            vin=vin,
-            query=query,
-        )
+    @staticmethod
+    def _build_integration_dispatcher():
+        base_url = os.getenv("INTEGRATION_GATEWAY_BASE_URL", "").strip()
+        token = os.getenv("INTEGRATION_GATEWAY_SERVICE_TOKEN", "").strip()
+        if not base_url or not token:
+            return None
+        return HttpIntegrationDispatcher(base_url, token)
+
+    def build_parts_search_plan(self, *, brand: str, query: str, model: str | None = None, vin: str | None = None):
+        return self.parts_catalogs.build_search_plan(brand=brand, model=model, vin=vin, query=query)
 
     def recognize_invoice(self, payload):
         return self.invoices.normalize_recognition(payload)
@@ -42,38 +70,311 @@ class MainAgentRuntime:
         plan = self.invoices.build_posting_plan(invoice)
         return self.expense_bridge.build_parts_invoice_postings(plan)
 
+    def import_bank_transactions(self, rows):
+        return self.banking.import_transactions(rows)
+
+    def list_bank_transactions(self):
+        return self.banking.get_bank_transactions()
+
+    def propose_bank_classification(self, transaction_id: str):
+        return self.banking.classify_bank_transaction(transaction_id)
+
+    def confirm_bank_classification(self, transaction_id: str, **changes):
+        return self.banking.confirm_classification(transaction_id, **changes)
+
+    def finance_review_queue(self):
+        return self.banking.get_needs_review()
+
     def list_specialized_agents(self):
         return self.agent_registry.list_agents()
 
-    def delegate_task(self, *, agent_id: str, capability: str,
-                      instruction: str, context=None):
-        return self.delegation.delegate(
-            agent_id=agent_id,
-            capability=capability,
-            instruction=instruction,
-            context=context,
+    def list_ecosystem_projects(self):
+        return self.project_registry.list_projects()
+
+    def get_ecosystem_project(self, project_id: str):
+        project = self.project_registry.get(project_id)
+        return None if project is None else project.__dict__.copy()
+
+    def ecosystem_repositories(self, *, active_only: bool = False):
+        return self.project_registry.repositories(active_only=active_only)
+
+    def create_business_case(self, organization_id: str, created_by: str, title: str, case_type: str = "general"):
+        return self.business_cases.create_case(organization_id, created_by, title, case_type)
+
+    def list_business_cases(self, organization_id: str, status: str | None = None):
+        return self.business_cases.list_cases(organization_id, status)
+
+    def get_business_case(self, organization_id: str, case_id: str):
+        return self.business_cases.get_case(organization_id, case_id)
+
+    def link_business_record(self, organization_id: str, case_id: str, project_id: str,
+                             record_type: str, record_id: str, actor_id: str):
+        return self.business_cases.link_record(organization_id, case_id, project_id,
+                                               record_type, record_id, actor_id)
+
+    def record_business_signal(self, organization_id: str, case_id: str, project_id: str,
+                               source_record_id: str, source_event_id: str, event_type: str,
+                               metadata=None):
+        return self.business_cases.record_signal(organization_id, case_id, project_id,
+                                                  source_record_id, source_event_id, event_type, metadata)
+
+    def decide_business_review(self, organization_id: str, case_id: str, review_id: str,
+                               actor_id: str, approved: bool):
+        return self.business_cases.decide_review(organization_id, case_id, review_id, actor_id, approved)
+
+    def resume_business_case(self, organization_id: str, case_id: str, actor_id: str, reason: str):
+        return self.business_cases.resume_case(organization_id, case_id, actor_id, reason)
+
+    def close_business_case(self, organization_id: str, case_id: str, actor_id: str):
+        return self.business_cases.close_case(organization_id, case_id, actor_id)
+
+    def business_case_evidence(self, organization_id: str, case_id: str, user_id: str):
+        case = self.business_cases.get_case(organization_id, case_id)
+        reader = CaseSourceReader(
+            fleet_backend=self.fleet_backend,
+            finance=FinanceReadConnector.from_environment(),
+            mailbox=self.mail_collector.mailbox,
+            fleet_organization_id=os.getenv("FLEET_SINGLE_ORGANIZATION_ID", "").strip(),
         )
+        return reader.snapshot(case, user_id)
+
+    def finance_plan_fact(self, organization_id: str, *, from_date: str | None = None,
+                          to_date: str | None = None):
+        return FinanceReadConnector.from_environment().plan_fact(
+            organization_id, from_date=from_date, to_date=to_date)
+
+    def create_annual_plan(self, organization_id: str, year: int, objective: str, actor_id: str):
+        return self.annual_planner.create(organization_id, year, objective, actor_id)
+
+    def list_annual_plans(self, organization_id: str, year: int | None = None):
+        return self.annual_planner.list(organization_id, year)
+
+    def get_annual_plan(self, organization_id: str, plan_id: str):
+        return self.annual_planner.overview(
+            organization_id, plan_id, self.business_cases.list_cases(organization_id))
+
+    def add_annual_milestone(self, organization_id: str, plan_id: str, month: int,
+                             title: str, actor_id: str, business_case_id: str | None = None):
+        if business_case_id is not None:
+            self.business_cases.get_case(organization_id, business_case_id)
+        return self.annual_planner.add_milestone(organization_id, plan_id, month,
+                                                 title, actor_id, business_case_id)
+
+    def approve_annual_plan(self, organization_id: str, plan_id: str, actor_id: str):
+        return self.annual_planner.approve(organization_id, plan_id, actor_id)
+
+    def propose_annual_milestone_status(self, organization_id: str, plan_id: str,
+                                        milestone_id: str, next_status: str,
+                                        reason: str, actor_id: str):
+        return self.annual_planner.propose_milestone_status(
+            organization_id, plan_id, milestone_id, next_status, reason, actor_id)
+
+    def decide_annual_proposal(self, organization_id: str, plan_id: str,
+                               proposal_id: str, actor_id: str, approved: bool):
+        return self.annual_planner.decide_proposal(
+            organization_id, plan_id, proposal_id, actor_id, approved)
+
+    def delegate_task(self, *, agent_id: str, capability: str, instruction: str, context=None):
+        return self.delegation.delegate(agent_id=agent_id, capability=capability, instruction=instruction, context=context)
 
     def complete_delegated_task(self, delegation_id: str, result):
         return self.delegation.complete(delegation_id, result)
 
-    def add_mail_account(self, *, account_id: str, address: str, provider: str,
-                         display_name: str | None = None):
-        return self.mail_collector.add_account(
-            account_id=account_id,
-            address=address,
-            provider=provider,
-            display_name=display_name,
+    def add_mail_account(self, *, user_id: str, account_id: str, address: str, provider: str, display_name: str | None = None):
+        return self.mail_collector.add_account(user_id=user_id, account_id=account_id, address=address, provider=provider, display_name=display_name)
+
+    def ingest_mail(self, user_id: str, messages):
+        return self.mail_collector.ingest_messages(user_id, messages)
+
+    def unified_inbox(self, user_id: str, *, unread_only: bool = False, smart_folder: str | None = None):
+        return self.mail_sync.inbox(user_id, unread_only=unread_only, smart_folder=smart_folder)
+
+    def process_mail(self, user_id: str, email_id: str, *, organization_id: str | None = None):
+        message = self.mail_collector.process_message(user_id, email_id, organization_id=organization_id)
+        integration_delivery = []
+        if self.integration_dispatcher is not None:
+            for event in self.integration_outbox.pending(destination="messenger"):
+                if event["user_id"] != user_id or event["source_id"] != email_id:
+                    continue
+                try:
+                    response = self.integration_dispatcher.dispatch(event)
+                    self.integration_outbox.mark_attempt(event["event_id"], delivered=True)
+                    integration_delivery.append({"event_id": event["event_id"], "status": "delivered", "response": response})
+                except Exception:
+                    self.integration_outbox.mark_attempt(event["event_id"], delivered=False)
+                    integration_delivery.append({"event_id": event["event_id"], "status": "failed"})
+
+        fleet_delivery = []
+        if organization_id and message.get("classification") == "parts_invoice_candidate":
+            for candidate in self.fleet_document_queue.list_pending(user_id):
+                if candidate["source_email_id"] != email_id or candidate["organization_id"] != organization_id:
+                    continue
+                try:
+                    attachment = self.fetch_mail_attachment(user_id, email_id, candidate["attachment_id"])
+                    persisted = self.fleet_backend.create_document_candidate(
+                        organization_id=organization_id,
+                        source_user_id=user_id,
+                        source_email_id=email_id,
+                        source_attachment_id=candidate["attachment_id"],
+                        original_name=str(attachment.get("filename") or candidate["filename"]),
+                        mime_type=attachment.get("mime_type") or candidate.get("mime_type"),
+                        size_bytes=attachment.get("size_bytes") or candidate.get("size_bytes"),
+                        document_type=candidate.get("document_type", "parts_invoice"),
+                        metadata={"sender": message.get("sender"), "subject": message.get("subject"), "classification": message.get("classification"), "source_account_id": message.get("account_id")},
+                        content_bytes=attachment["content_bytes"],
+                    )
+                    fleet_delivery.append({"status": "forwarded_to_fleet", "candidate": persisted})
+                except Exception:
+                    self.integration_outbox.publish(user_id=user_id, event_type="fleet_document_delivery_failed", source="unified_mail", source_id=email_id, title=candidate["filename"], payload={"organization_id": organization_id, "candidate_id": candidate["candidate_id"]}, destinations=("main_agent",), priority="high")
+                    fleet_delivery.append({"status": "delivery_failed", "candidate_id": candidate["candidate_id"]})
+        if organization_id and message.get("classification") in {
+            "transport_request", "parts_invoice_candidate",
+            "financial_document", "supplier_offer_or_procurement"
+        }:
+            kind = "transport_request" if message["classification"] == "transport_request" else (
+                "finance_review" if message["classification"] == "financial_document" else "procurement")
+            case = self.business_cases.ensure_from_mail(
+                organization_id, user_id, email_id,
+                str(message.get("subject") or "Письмо")[:300], kind)
+            case_id = case["case_id"]
+            message["business_case_id"] = case_id
+            self.business_cases.record_signal(
+                organization_id, case_id, "mail-contour", email_id,
+                "mail:classified:" + email_id, "observed")
+            for delivery in fleet_delivery:
+                candidate = delivery.get("candidate") or {}
+                cid = str(candidate.get("candidate_id") or candidate.get("id") or "")
+                if delivery["status"] == "forwarded_to_fleet" and cid:
+                    self.business_cases.link_record(
+                        organization_id, case_id, "fleet-management",
+                        "document_candidate", cid, "main-agent")
+                    self.business_cases.record_signal(
+                        organization_id, case_id, "fleet-management", cid,
+                        "fleet:document_candidate:" + cid, "progress")
+        if integration_delivery:
+            message["integration_delivery"] = integration_delivery
+        if fleet_delivery:
+            message["fleet_document_delivery"] = fleet_delivery
+        return message
+
+    def fetch_mail_attachment(self, user_id: str, email_id: str, attachment_id: str):
+        message = self.mail_collector.mailbox.get_message(user_id, email_id)
+        account_id = str(message["account_id"])
+        provider = self.mail_collector.mailbox.accounts[(user_id, account_id)].provider
+        attachment = self.mail_providers.get(provider).fetch_attachment(
+            user_id,
+            account_id,
+            str(message["provider_message_id"]),
+            attachment_id,
         )
+        encoded = attachment.get("content_base64") or attachment.get("content_base64url") or ""
+        if not encoded:
+            raise ValueError("mail gateway returned empty attachment")
+        try:
+            content = base64.b64decode(encoded, validate=False)
+        except Exception:
+            content = base64.urlsafe_b64decode(str(encoded) + "=" * (-len(str(encoded)) % 4))
+        return {**attachment, "content_bytes": content, "size_bytes": attachment.get("size_bytes") or len(content)}
 
-    def ingest_mail(self, messages):
-        return self.mail_collector.ingest_messages(messages)
+    def sync_mail(self, user_id: str, *, organization_id: str | None = None):
+        """Sync provider mail and immediately classify/route every newly imported message."""
+        self.refresh_mail_accounts(user_id)
+        sync_result = self.mail_sync.sync_all(user_id)
+        processed = []
+        failed = []
+        for email_id in sync_result.get("imported_email_ids", []):
+            try:
+                processed.append(self.process_mail(user_id, email_id, organization_id=organization_id))
+            except Exception:
+                failed.append(email_id)
+        return {
+            **sync_result,
+            "processed": len(processed),
+            "processing_failed": len(failed),
+            "processing_failed_email_ids": failed,
+        }
 
-    def unified_inbox(self, *, unread_only: bool = False):
-        return self.mail_collector.inbox(unread_only=unread_only)
+    def register_mail_provider(self, backend):
+        self.mail_providers.register(backend)
 
-    def process_mail(self, email_id: str):
-        return self.mail_collector.process_message(email_id)
+    def register_standard_mail_providers(self, gateway):
+        self.mail_providers.register(GmailProviderAdapter(gateway))
+        self.mail_providers.register(OutlookProviderAdapter(gateway))
+
+    def refresh_mail_accounts(self, user_id: str):
+        return self.mail_sync.refresh_accounts(user_id)
+
+    def begin_mail_authorization(self, *, user_id: str, provider: str, redirect_uri: str, state: str):
+        return self.mail_providers.get(provider).build_authorization_url(user_id=user_id, redirect_uri=redirect_uri, state=state)
+
+    def complete_mail_authorization(self, *, user_id: str, provider: str, code: str, redirect_uri: str, state: str):
+        account = self.mail_providers.get(provider).complete_authorization(user_id=user_id, code=code, redirect_uri=redirect_uri, state=state)
+        self.mail_sync.refresh_accounts(user_id)
+        return account
+
+    def mail_connection_state(self, user_id: str):
+        return self.mail_sync.state(user_id)
+
+    def mail_accounts_overview(self, user_id: str):
+        return self.mail_accounts_view.overview(user_id)
+
+    def integration_events(self, user_id: str):
+        return self.integration_outbox.list_for_user(user_id)
+
+    def _record_fleet_agent_result(self, organization_id: str, task: dict):
+        case_id = task.get("businessCaseId")
+        task_id = task.get("taskId")
+        if not case_id or not task_id:
+            return
+        self.business_cases.get_case(organization_id, case_id)
+        self.business_cases.link_record(
+            organization_id, case_id, "fleet-management",
+            "ua_agent_task", task_id, "main_agent")
+        status = task.get("status")
+        event_type = "completed" if status == "completed" else (
+            "failed" if status == "failed" else "progress")
+        self.business_cases.record_signal(
+            organization_id, case_id, "fleet-management", task_id,
+            "ua-agent-task:" + task_id + ":" + str(status), event_type,
+            {"task_status": str(status)})
+
+    def delegate_to_fleet_agent(self, organization_id: str, message: str,
+                                task_id: str | None = None,
+                                business_case_id: str | None = None):
+        if business_case_id:
+            self.business_cases.get_case(organization_id, business_case_id)
+        task = self.fleet_backend.create_ua_agent_task(
+            organization_id=organization_id, message=message, task_id=task_id,
+            business_case_id=business_case_id)
+        self._record_fleet_agent_result(organization_id, task)
+        return task
+
+    def get_fleet_agent_task(self, organization_id: str, task_id: str):
+        task = self.fleet_backend.get_ua_agent_task(
+            organization_id=organization_id, task_id=task_id)
+        self._record_fleet_agent_result(organization_id, task)
+        return task
+
+    def fleet_vehicles(self, organization_id: str):
+        return self.fleet_backend.list_vehicles(organization_id)
+
+    def fleet_document_candidates(self, organization_id: str):
+        return self.fleet_backend.list_document_candidates(organization_id)
+
+    def fleet_document_candidate_content(self, organization_id: str, candidate_id: str):
+        return self.fleet_backend.get_document_candidate_content(organization_id, candidate_id)
+
+    def fleet_vehicle_work_items(self, organization_id: str, vehicle_id: str):
+        return self.fleet_backend.get_vehicle_work_items(organization_id, vehicle_id)
+
+    def assign_fleet_document_candidate(self, *, organization_id: str, candidate_id: str, vehicle_id: str, purchase_request_id: str | None = None, repair_id: str | None = None):
+        return self.fleet_backend.assign_document_candidate(organization_id=organization_id, candidate_id=candidate_id, vehicle_id=vehicle_id, purchase_request_id=purchase_request_id, repair_id=repair_id)
+
+    def dismiss_fleet_document_candidate(self, *, organization_id: str, candidate_id: str):
+        return self.fleet_backend.dismiss_document_candidate(organization_id=organization_id, candidate_id=candidate_id)
+
+    def client_manifest(self, device: str):
+        return self.app_shell.build_client_manifest(device)
 
 
 def build_runtime():
@@ -81,5 +382,4 @@ def build_runtime():
 
 
 def build_runtime_agent():
-    """Backward-compatible helper returning the conversational agent only."""
     return build_runtime().agent
