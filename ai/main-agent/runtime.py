@@ -227,6 +227,30 @@ class MainAgentRuntime:
                 except Exception:
                     self.integration_outbox.publish(user_id=user_id, event_type="fleet_document_delivery_failed", source="unified_mail", source_id=email_id, title=candidate["filename"], payload={"organization_id": organization_id, "candidate_id": candidate["candidate_id"]}, destinations=("main_agent",), priority="high")
                     fleet_delivery.append({"status": "delivery_failed", "candidate_id": candidate["candidate_id"]})
+        if organization_id and message.get("classification") in {
+            "transport_request", "parts_invoice_candidate",
+            "financial_document", "supplier_offer_or_procurement"
+        }:
+            kind = "transport_request" if message["classification"] == "transport_request" else (
+                "finance_review" if message["classification"] == "financial_document" else "procurement")
+            case = self.business_cases.ensure_from_mail(
+                organization_id, user_id, email_id,
+                str(message.get("subject") or "Письмо")[:300], kind)
+            case_id = case["case_id"]
+            message["business_case_id"] = case_id
+            self.business_cases.record_signal(
+                organization_id, case_id, "mail-contour", email_id,
+                "mail:classified:" + email_id, "observed")
+            for delivery in fleet_delivery:
+                candidate = delivery.get("candidate") or {}
+                cid = str(candidate.get("candidate_id") or candidate.get("id") or "")
+                if delivery["status"] == "forwarded_to_fleet" and cid:
+                    self.business_cases.link_record(
+                        organization_id, case_id, "fleet-management",
+                        "document_candidate", cid, "main-agent")
+                    self.business_cases.record_signal(
+                        organization_id, case_id, "fleet-management", cid,
+                        "fleet:document_candidate:" + cid, "progress")
         if integration_delivery:
             message["integration_delivery"] = integration_delivery
         if fleet_delivery:
