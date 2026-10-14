@@ -117,6 +117,14 @@ class CaseSourceReader:
             _require_single_org(organization_id, self.fleet_organization_id, "fleet")
             if not self.fleet_backend:
                 raise SourceUnavailable("fleet: connector unavailable")
+            if record_type == "ua_agent_task":
+                task = self.fleet_backend.get_ua_agent_task(
+                    organization_id=organization_id, task_id=record_id)
+                if (str(task.get("taskId")) != record_id or
+                        str(task.get("organizationId")) != organization_id):
+                    raise KeyError(record_id)
+                return {"task_id": record_id, "status": task.get("status"),
+                        "reply": task.get("reply"), "mode": task.get("mode")}
             if record_type == "vehicle":
                 record = self.fleet_backend.get_vehicle(record_id, organization_id)
                 if not record or str(record.get("vehicle_id") or record.get("id")) != record_id:
