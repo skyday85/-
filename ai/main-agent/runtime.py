@@ -321,13 +321,39 @@ class MainAgentRuntime:
     def integration_events(self, user_id: str):
         return self.integration_outbox.list_for_user(user_id)
 
-    def delegate_to_fleet_agent(self, organization_id: str, message: str, task_id: str | None = None):
-        return self.fleet_backend.create_ua_agent_task(
-            organization_id=organization_id, message=message, task_id=task_id)
+    def _record_fleet_agent_result(self, organization_id: str, task: dict):
+        case_id = task.get("businessCaseId")
+        task_id = task.get("taskId")
+        if not case_id or not task_id:
+            return
+        self.business_cases.get_case(organization_id, case_id)
+        self.business_cases.link_record(
+            organization_id, case_id, "fleet-management",
+            "ua_agent_task", task_id, "main_agent")
+        status = task.get("status")
+        event_type = "completed" if status == "completed" else (
+            "failed" if status == "failed" else "progress")
+        self.business_cases.record_signal(
+            organization_id, case_id, "fleet-management", task_id,
+            "ua-agent-task:" + task_id + ":" + str(status), event_type,
+            {"task_status": str(status)})
+
+    def delegate_to_fleet_agent(self, organization_id: str, message: str,
+                                task_id: str | None = None,
+                                business_case_id: str | None = None):
+        if business_case_id:
+            self.business_cases.get_case(organization_id, business_case_id)
+        task = self.fleet_backend.create_ua_agent_task(
+            organization_id=organization_id, message=message, task_id=task_id,
+            business_case_id=business_case_id)
+        self._record_fleet_agent_result(organization_id, task)
+        return task
 
     def get_fleet_agent_task(self, organization_id: str, task_id: str):
-        return self.fleet_backend.get_ua_agent_task(
+        task = self.fleet_backend.get_ua_agent_task(
             organization_id=organization_id, task_id=task_id)
+        self._record_fleet_agent_result(organization_id, task)
+        return task
 
     def fleet_vehicles(self, organization_id: str):
         return self.fleet_backend.list_vehicles(organization_id)
