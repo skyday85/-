@@ -47,6 +47,12 @@ class BusinessCaseStore:
               status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS business_cases_org ON business_cases(organization_id,updated_at);
+            CREATE TABLE IF NOT EXISTS business_case_sources (
+              organization_id TEXT NOT NULL,
+              source_record_id TEXT NOT NULL, owner_user_id TEXT NOT NULL,
+              case_id TEXT NOT NULL REFERENCES business_cases(case_id),
+              PRIMARY KEY(organization_id,source_record_id,owner_user_id)
+            );
             CREATE TABLE IF NOT EXISTS business_case_links (
               link_id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES business_cases(case_id),
               organization_id TEXT NOT NULL, project_id TEXT NOT NULL,
