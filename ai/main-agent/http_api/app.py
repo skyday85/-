@@ -30,6 +30,11 @@ class AgentCommandRequest(BaseModel):
     text: str
 
 
+class FleetAgentTaskRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    task_id: Optional[str] = None
+
+
 class BankTransactionPayload(BaseModel):
     transaction_id: str = Field(min_length=1)
     date: str = Field(min_length=1)
@@ -496,6 +501,31 @@ def sync_mail(user_id: str = Depends(authenticated_user), organization_id: str =
 @app.get("/mail/integration-events")
 def mail_integration_events(user_id: str = Depends(authenticated_user)):
     return runtime.client_api.get_integration_events(user_id)
+
+
+@app.post("/agent/fleet-tasks")
+def delegate_fleet_task(payload: FleetAgentTaskRequest,
+                        user_id: str = Depends(authenticated_user),
+                        organization_id: str = Depends(authenticated_organization)):
+    """Delegated read/analysis task; UA Agent cannot mutate operational records via this path."""
+    try:
+        result = runtime.delegate_to_fleet_agent(
+            organization_id, payload.message, task_id=payload.task_id)
+        return {"initiator": user_id, "task": result}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid UA task") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Fleet agent service unavailable") from exc
+
+
+@app.get("/agent/fleet-tasks/{task_id}")
+def get_delegated_fleet_task(task_id: str,
+                             _user: str = Depends(authenticated_user),
+                             organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.get_fleet_agent_task(organization_id, task_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Fleet agent task unavailable") from exc
 
 
 @app.get("/fleet/vehicles")
