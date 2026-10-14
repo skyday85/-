@@ -122,6 +122,34 @@ class BusinessCaseStore:
             self._audit(db, org, case_id, "case_created", actor, {"case_type": case_type})
         return self.get_case(org, case_id)
 
+    def ensure_from_mail(self, organization_id: str, owner_user_id: str,
+                         email_id: str, title: str, case_type: str = "general") -> dict:
+        """Idempotent organization/user/mail source mapping."""
+        org = _required(organization_id, "organization_id")
+        owner = _required(owner_user_id, "owner_user_id")
+        email_id = _required(email_id, "email_id")
+        title = _required(title, "title")
+        if case_type not in CASE_TYPES:
+            raise ValueError("unsupported case_type")
+        self._project("mail-contour")
+        with self._lock, self._db() as db:
+            existing = db.execute(
+                "SELECT case_id FROM business_case_sources WHERE organization_id=? AND source_record_id=? AND owner_user_id=?",
+                (org, email_id, owner)).fetchone()
+            if existing:
+                case_id = existing["case_id"]
+            else:
+                case_id, now = str(uuid4()), _now()
+                db.execute("INSERT INTO business_cases VALUES (?,?,?,?,?,?,?,?)",
+                           (case_id, org, owner, title, case_type, "open", now, now))
+                db.execute("INSERT INTO business_case_sources VALUES (?,?,?,?)",
+                           (org, email_id, owner, case_id))
+                db.execute("INSERT INTO business_case_links VALUES (?,?,?,?,?,?,?)",
+                           (str(uuid4()), case_id, org, "mail-contour", "email", email_id, now))
+                self._audit(db, org, case_id, "case_created_from_mail", owner,
+                            {"email_id": email_id, "case_type": case_type})
+        return self.get_case(org, case_id)
+
     def list_cases(self, organization_id: str, status: str | None = None) -> list[dict]:
         org = _required(organization_id, "organization_id")
         if status is not None and status not in STATUSES:
