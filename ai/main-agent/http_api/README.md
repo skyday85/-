@@ -70,3 +70,34 @@ implementation. It is intended for one-process/local testing; run no
 multi-instance production deployment with this file-backed store.
 The future dedicated main-agent service should migrate the same contract to
 shared organization-isolated Postgres before real multi-user rollout.
+
+## Delegating to UA Agent (fleet-management)
+
+The Main Agent can ask the **same UA Agent** used by the embedded fleet chat to
+analyze fleet information through a separate service-to-service task API.
+This is not a generic chat endpoint with raw database access.
+
+- `POST /agent/fleet-tasks` (authenticated user + organization): `{"message":"...","task_id":"<optional UUID>"}`
+- `GET /agent/fleet-tasks/{task_id}` (authenticated user + same organization): poll status
+
+Under the hood, the Main Agent connector calls:
+
+- `POST {FLEET_API_BASE_URL}/api/agent/ua/tasks`
+- `GET {FLEET_API_BASE_URL}/api/agent/ua/tasks?organizationId=...&taskId=...`
+
+The server supplies `FLEET_MAIN_AGENT_API_KEY` as `x-main-agent-key`.
+It is never placed in the user's browser or mobile client.
+The fleet service needs `MAIN_AGENT_API_KEY` with the matching value and a
+**single-organization pin** `FLEET_SINGLE_ORGANIZATION_ID`. Until fleet records
+have native organization ownership, the endpoint is deliberately disabled
+without that pin.
+
+The UA task route is **read/analysis only**, idempotent by `taskId`.
+Creating a repair, adding a fleet expense, entering a document and issuing stock
+are separate authorized, preview-and-confirm workflows inside the fleet app.
+No service-side LLM tool may bypass a required human approval.
+
+Status can be `processing`, `completed`, or `failed`.
+This first iteration is synchronous with durable task state, **not** a worker queue:
+multi-instance operation, stale-task recovery and tenant-scoped business data
+require further work before production deployment.
