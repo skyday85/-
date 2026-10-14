@@ -156,7 +156,7 @@ class CaseSourceReader:
                 evidence["status"] = "available"
                 evidence["data"] = self.read_link(case["organization_id"],
                                                  case["created_by"], actor_id, link)
-            except (KeyError, ValueError, SourceUnavailable) as exc:
+            except (KeyError, ValueError, SourceUnavailable, OSError, TimeoutError) as exc:
                 evidence["status"] = "unavailable"
                 evidence["reason"] = type(exc).__name__
             results.append(evidence)
