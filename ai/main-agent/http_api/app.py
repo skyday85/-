@@ -33,6 +33,7 @@ class AgentCommandRequest(BaseModel):
 class FleetAgentTaskRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     task_id: Optional[str] = None
+    business_case_id: Optional[str] = None
 
 
 class BankTransactionPayload(BaseModel):
@@ -510,7 +511,8 @@ def delegate_fleet_task(payload: FleetAgentTaskRequest,
     """Delegated read/analysis task; UA Agent cannot mutate operational records via this path."""
     try:
         result = runtime.delegate_to_fleet_agent(
-            organization_id, payload.message, task_id=payload.task_id)
+            organization_id, payload.message, task_id=payload.task_id,
+            business_case_id=payload.business_case_id)
         return {"initiator": user_id, "task": result}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid UA task") from exc
