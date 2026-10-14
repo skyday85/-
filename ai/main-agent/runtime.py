@@ -321,6 +321,14 @@ class MainAgentRuntime:
     def integration_events(self, user_id: str):
         return self.integration_outbox.list_for_user(user_id)
 
+    def delegate_to_fleet_agent(self, organization_id: str, message: str, task_id: str | None = None):
+        return self.fleet_backend.create_ua_agent_task(
+            organization_id=organization_id, message=message, task_id=task_id)
+
+    def get_fleet_agent_task(self, organization_id: str, task_id: str):
+        return self.fleet_backend.get_ua_agent_task(
+            organization_id=organization_id, task_id=task_id)
+
     def fleet_vehicles(self, organization_id: str):
         return self.fleet_backend.list_vehicles(organization_id)
 
