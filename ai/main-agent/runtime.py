@@ -10,6 +10,8 @@ from connectors.http_fleet_backend import HttpFleetBackend
 from ecosystem.expense_bridge import ExpenseBridge
 from ecosystem.project_registry import ProjectRegistry
 from ecosystem.business_cases import BusinessCaseStore
+from ecosystem.annual_planner import AnnualPlanner
+from ecosystem.source_readers import CaseSourceReader, FinanceReadConnector
 from finance.banking import BankingModule
 from finance.invoices import InvoiceWorkflow
 from integrations.events import IntegrationOutbox
@@ -35,6 +37,7 @@ class MainAgentRuntime:
         self.expense_bridge = ExpenseBridge()
         self.project_registry = ProjectRegistry()
         self.business_cases = BusinessCaseStore(os.getenv('MAIN_AGENT_DATABASE_PATH', './data/main_agent.sqlite3'), self.project_registry)
+        self.annual_planner = AnnualPlanner(os.getenv('MAIN_AGENT_DATABASE_PATH', './data/main_agent.sqlite3'))
         self.agent_registry = AgentRegistry()
         self.delegation = DelegationEngine(self.agent_registry)
         db_path = os.getenv("MAIL_DATABASE_PATH", "./data/mail_contour.sqlite3")
@@ -124,6 +127,52 @@ class MainAgentRuntime:
 
     def close_business_case(self, organization_id: str, case_id: str, actor_id: str):
         return self.business_cases.close_case(organization_id, case_id, actor_id)
+
+    def business_case_evidence(self, organization_id: str, case_id: str, user_id: str):
+        case = self.business_cases.get_case(organization_id, case_id)
+        reader = CaseSourceReader(
+            fleet_backend=self.fleet_backend,
+            finance=FinanceReadConnector.from_environment(),
+            mailbox=self.mail_collector.mailbox,
+            fleet_organization_id=os.getenv("FLEET_SINGLE_ORGANIZATION_ID", "").strip(),
+        )
+        return reader.snapshot(case, user_id)
+
+    def finance_plan_fact(self, organization_id: str, *, from_date: str | None = None,
+                          to_date: str | None = None):
+        return FinanceReadConnector.from_environment().plan_fact(
+            organization_id, from_date=from_date, to_date=to_date)
+
+    def create_annual_plan(self, organization_id: str, year: int, objective: str, actor_id: str):
+        return self.annual_planner.create(organization_id, year, objective, actor_id)
+
+    def list_annual_plans(self, organization_id: str, year: int | None = None):
+        return self.annual_planner.list(organization_id, year)
+
+    def get_annual_plan(self, organization_id: str, plan_id: str):
+        return self.annual_planner.overview(
+            organization_id, plan_id, self.business_cases.list_cases(organization_id))
+
+    def add_annual_milestone(self, organization_id: str, plan_id: str, month: int,
+                             title: str, actor_id: str, business_case_id: str | None = None):
+        if business_case_id is not None:
+            self.business_cases.get_case(organization_id, business_case_id)
+        return self.annual_planner.add_milestone(organization_id, plan_id, month,
+                                                 title, actor_id, business_case_id)
+
+    def approve_annual_plan(self, organization_id: str, plan_id: str, actor_id: str):
+        return self.annual_planner.approve(organization_id, plan_id, actor_id)
+
+    def propose_annual_milestone_status(self, organization_id: str, plan_id: str,
+                                        milestone_id: str, next_status: str,
+                                        reason: str, actor_id: str):
+        return self.annual_planner.propose_milestone_status(
+            organization_id, plan_id, milestone_id, next_status, reason, actor_id)
+
+    def decide_annual_proposal(self, organization_id: str, plan_id: str,
+                               proposal_id: str, actor_id: str, approved: bool):
+        return self.annual_planner.decide_proposal(
+            organization_id, plan_id, proposal_id, actor_id, approved)
 
     def delegate_task(self, *, agent_id: str, capability: str, instruction: str, context=None):
         return self.delegation.delegate(agent_id=agent_id, capability=capability, instruction=instruction, context=context)
