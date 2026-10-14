@@ -40,6 +40,38 @@ class HttpFleetBackend:
         with urlopen(request, timeout=15) as response:
             return json.loads(response.read().decode("utf-8"))
 
+    def _ua_task_request(self, method: str, *, organization_id: str,
+                         task_id: str, message: Optional[str] = None) -> Dict[str, Any]:
+        """Use the same service credential as fleet API, but a dedicated scoped UA task endpoint."""
+        if not organization_id or not task_id:
+            raise ValueError("organization_id and task_id are required")
+        if method not in {"GET", "POST"}:
+            raise ValueError("unsupported UA task method")
+        url = f"{self.base_url}/api/agent/ua/tasks"
+        payload = None
+        if method == "GET":
+            url += "?" + urlencode({"organizationId": organization_id, "taskId": task_id})
+        else:
+            if not message or not message.strip() or len(message) > 2000:
+                raise ValueError("UA task message must be 1 to 2000 characters")
+            payload = json.dumps({"organizationId": organization_id,
+                                  "taskId": task_id, "message": message},
+                                 ensure_ascii=False).encode("utf-8")
+        headers = {"x-main-agent-key": self.api_key, "accept": "application/json"}
+        if payload is not None:
+            headers["content-type"] = "application/json"
+        request = Request(url, data=payload, headers=headers, method=method)
+        with urlopen(request, timeout=50) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def create_ua_agent_task(self, *, organization_id: str, message: str,
+                             task_id: Optional[str] = None) -> Dict[str, Any]:
+        return self._ua_task_request("POST", organization_id=organization_id,
+                                     task_id=task_id or str(uuid.uuid4()), message=message)
+
+    def get_ua_agent_task(self, *, organization_id: str, task_id: str) -> Dict[str, Any]:
+        return self._ua_task_request("GET", organization_id=organization_id, task_id=task_id)
+
     def _get(self, vehicle_id: Optional[str] = None, view: Optional[str] = None,
              organization_id: Optional[str] = None) -> Dict[str, Any]:
         return self._request("GET", vehicle_id=vehicle_id, view=view, organization_id=organization_id)
