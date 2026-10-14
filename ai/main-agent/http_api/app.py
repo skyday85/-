@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 
 from app_shell.client_api import ClientContext
 from ecosystem.business_cases import CaseConflict
+from ecosystem.annual_planner import PlanConflict
+from ecosystem.source_readers import SourceUnavailable
 from mail_contour.http_gateway import HttpOAuthMailGateway
 from runtime import build_runtime
 
@@ -73,6 +75,26 @@ class BusinessCaseReviewDecisionRequest(BaseModel):
 
 class BusinessCaseResumeRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
+
+
+class AnnualPlanCreateRequest(BaseModel):
+    year: int = Field(ge=2020, le=2100)
+    objective: str = Field(min_length=1, max_length=1000)
+
+
+class AnnualMilestoneRequest(BaseModel):
+    month: int = Field(ge=1, le=12)
+    title: str = Field(min_length=1, max_length=500)
+    business_case_id: Optional[str] = None
+
+
+class AnnualMilestoneProposalRequest(BaseModel):
+    next_status: Literal["planned", "in_progress", "done", "blocked"]
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class AnnualProposalDecisionRequest(BaseModel):
+    approved: bool
 
 
 class FleetDocumentAssignmentRequest(BaseModel):
@@ -316,6 +338,102 @@ def close_business_case(case_id: str,
         return runtime.close_business_case(organization_id, case_id, user_id)
     except (ValueError, CaseConflict, KeyError) as exc:
         case_api_error(exc)
+
+
+@app.get("/business-cases/{case_id}/evidence")
+def business_case_evidence(case_id: str,
+                           user_id: str = Depends(authenticated_user),
+                           organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.business_case_evidence(organization_id, case_id, user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Business case not found") from exc
+
+
+@app.get("/planning/annual")
+def list_annual_plans(year: Optional[int] = None,
+                      _user: str = Depends(authenticated_user),
+                      organization_id: str = Depends(authenticated_organization)):
+    return {"items": runtime.list_annual_plans(organization_id, year)}
+
+
+@app.post("/planning/annual", status_code=201)
+def create_annual_plan(payload: AnnualPlanCreateRequest,
+                       user_id: str = Depends(authenticated_user),
+                       organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.create_annual_plan(organization_id, payload.year,
+                                          payload.objective, user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/planning/annual/{plan_id}")
+def get_annual_plan(plan_id: str,
+                    _user: str = Depends(authenticated_user),
+                    organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.get_annual_plan(organization_id, plan_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plan not found") from exc
+
+
+@app.post("/planning/annual/{plan_id}/milestones")
+def add_annual_milestone(plan_id: str, payload: AnnualMilestoneRequest,
+                         user_id: str = Depends(authenticated_user),
+                         organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.add_annual_milestone(organization_id, plan_id, payload.month,
+                                            payload.title, user_id, payload.business_case_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plan or case not found") from exc
+    except PlanConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/planning/annual/{plan_id}/approve")
+def approve_annual_plan(plan_id: str,
+                        user_id: str = Depends(authenticated_user),
+                        organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.approve_annual_plan(organization_id, plan_id, user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plan not found") from exc
+    except PlanConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/planning/annual/{plan_id}/milestones/{milestone_id}/propose")
+def propose_annual_milestone(plan_id: str, milestone_id: str,
+                             payload: AnnualMilestoneProposalRequest,
+                             user_id: str = Depends(authenticated_user),
+                             organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.propose_annual_milestone_status(
+            organization_id, plan_id, milestone_id, payload.next_status,
+            payload.reason, user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plan or milestone not found") from exc
+    except PlanConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/planning/annual/{plan_id}/proposals/{proposal_id}/decision")
+def decide_annual_proposal(plan_id: str, proposal_id: str,
+                           payload: AnnualProposalDecisionRequest,
+                           user_id: str = Depends(authenticated_user),
+                           organization_id: str = Depends(authenticated_organization)):
+    try:
+        return runtime.decide_annual_proposal(organization_id, plan_id,
+                                              proposal_id, user_id, payload.approved)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Plan or proposal not found") from exc
+    except PlanConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/finance/transactions")
